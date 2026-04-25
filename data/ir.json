@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "0.2.0",
+  "docId": "agent-ir-industrial-demo",
+  "meta": {
+    "title": "Agentic IR：从群聊到多端交付物",
+    "subtitle": "Agent 只维护结构化 IR，Adapter 负责生成飞书文档、画板、Slides 与 PPTX",
+    "owner": "飞书 AI 开发创新赛 Demo",
+    "date": "2026-04-25",
+    "audience": "评委 / 产品 / 工程"
+  },
+  "theme": {
+    "name": "Executive Blue",
+    "accent": "#2F6BFF",
+    "accent2": "#7C3AED",
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "text": "#0F172A",
+    "muted": "#64748B",
+    "success": "#16A34A",
+    "warning": "#F97316",
+    "fontFace": "Aptos"
+  },
+  "assets": {
+    "hero": "assets/hero-ir.svg",
+    "collab": "assets/collaboration.svg",
+    "metrics": "assets/metrics.svg",
+    "architecture": "assets/architecture.svg"
+  },
+  "blocks": [
+    {
+      "id": "cover",
+      "kind": "cover",
+      "title": "Agentic IR 多端发布系统",
+      "subtitle": "用同一份结构化状态生成不同终端的高质量交付物",
+      "image": "hero",
+      "kicker": "Industrial Demo · v0.2"
+    },
+    {
+      "id": "problem",
+      "kind": "split",
+      "title": "为什么不能让 Agent 直接改文档？",
+      "image": "collab",
+      "points": [
+        "飞书文档、画板、Slides、PPTX 的底层格式完全不同。",
+        "如果 Agent 直接操作端侧格式，很难保证多端内容一致。",
+        "把决策、证据、流程、风险先落到 IR，发布时再投影。"
+      ]
+    },
+    {
+      "id": "architecture",
+      "kind": "flow",
+      "title": "工业级链路",
+      "caption": "Agent 的自由度被限制在 IR schema 内；Adapter 的自由度体现在布局、主题和端侧协议。",
+      "nodes": [
+        {"id": "im", "label": "飞书 IM / 文档评论"},
+        {"id": "agent", "label": "Agent 生成 IR Patch"},
+        {"id": "validator", "label": "Schema + 业务校验"},
+        {"id": "ir", "label": "Versioned IR"},
+        {"id": "adapters", "label": "Doc / Board / Slides / PPTX Adapters"},
+        {"id": "publish", "label": "人工确认后发布"}
+      ],
+      "edges": [["im", "agent"], ["agent", "validator"], ["validator", "ir"], ["ir", "adapters"], ["adapters", "publish"]]
+    },
+    {
+      "id": "metrics",
+      "kind": "metrics",
+      "title": "评估指标",
+      "image": "metrics",
+      "items": [
+        {"label": "内容一致性", "value": "99%", "note": "多端由 IR 重建"},
+        {"label": "人审时间", "value": "-65%", "note": "先审 IR 再发布"},
+        {"label": "返工次数", "value": "-40%", "note": "冲突在结构层解决"}
+      ]
+    },
+    {
+      "id": "capabilities",
+      "kind": "cards",
+      "title": "Agent 可以自由生成的内容块",
+      "cards": [
+        {"title": "Narrative", "body": "业务背景、洞察、结论、FAQ。"},
+        {"title": "Flow", "body": "流程图、架构链路、决策路径。"},
+        {"title": "Metrics", "body": "关键指标、评分、ROI、风险等级。"},
+        {"title": "Table", "body": "风险表、决策表、任务分工。"},
+        {"title": "Image", "body": "引用资产库里的图、截图、示意图。"},
+        {"title": "Theme", "body": "通过 design token 控制整体视觉风格。"}
+      ]
+    },
+    {
+      "id": "risks",
+      "kind": "table",
+      "title": "边界与控制",
+      "columns": ["风险", "工业级控制"],
+      "rows": [
+        ["Agent 写出非法结构", "JSON Schema + 业务规则校验 + patch 级别审阅"],
+        ["内容过长导致排版溢出", "Adapter 做分页、缩放、摘要和布局选择"],
+        ["图片资产缺失或版权不明", "资产库引用、上传校验、来源记录"],
+        ["用户在 SaaS 端手改导致冲突", "projection revision + diff/merge + 人工确认"],
+        ["平台 API 能力不一致", "端侧降级策略：文档线性化、画板空间化、PPT 视觉化"]
+      ]
+    },
+    {
+      "id": "roadmap",
+      "kind": "timeline",
+      "title": "下一步工程化路线",
+      "events": [
+        {"date": "Step 1", "title": "严格 schema", "body": "把 IR 的 block 类型、字段、资产引用和主题 token 固化。"},
+        {"date": "Step 2", "title": "Agent patch", "body": "Agent 只输出 JSON Patch，不整份重写 IR。"},
+        {"date": "Step 3", "title": "预览与发布", "body": "先生成本地预览，再由用户确认发布到飞书。"},
+        {"date": "Step 4", "title": "双向同步", "body": "记录端侧 revision，必要时把人工修改合并回 IR。"}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "ir-industrial-adapter-demo",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "description": "Industrial-style IR adapter demo: one IR to doc, whiteboard, Lark slides json and PPTX with images and themes.",
+  "scripts": {
+    "all": "node src/index.mjs all",
+    "build": "node src/index.mjs build",
+    "pptx": "node src/index.mjs pptx",
+    "all:variant": "node src/index.mjs all --ir data/ir.variant.json --out out/variant",
+    "validate": "node src/index.mjs validate",
+    "agent:patch": "node src/agent-patch-demo.mjs"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}

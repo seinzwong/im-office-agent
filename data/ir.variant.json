@@ -1,0 +1,98 @@
+{
+  "schemaVersion": "0.2.0",
+  "docId": "agent-ir-product-launch",
+  "meta": {
+    "title": "新品发布作战室",
+    "subtitle": "Agent 从市场群聊抽取发布策略，并生成评审文档、白板和路演 PPT",
+    "owner": "增长与产品团队",
+    "date": "2026-04-25",
+    "audience": "市场 / 销售 / 研发"
+  },
+  "theme": {
+    "name": "Launch Orange",
+    "accent": "#F97316",
+    "accent2": "#2563EB",
+    "background": "#FFF7ED",
+    "surface": "#FFFFFF",
+    "text": "#1F2937",
+    "muted": "#78716C",
+    "success": "#16A34A",
+    "warning": "#EA580C",
+    "fontFace": "Aptos"
+  },
+  "assets": {
+    "hero": "assets/collaboration.svg",
+    "collab": "assets/hero-ir.svg",
+    "metrics": "assets/metrics.svg",
+    "architecture": "assets/architecture.svg"
+  },
+  "blocks": [
+    {
+      "id": "cover",
+      "kind": "cover",
+      "title": "Launch Room：新品发布作战室",
+      "subtitle": "从飞书群聊到跨团队同步材料的一键生成",
+      "image": "hero",
+      "kicker": "Agent Generated IR"
+    },
+    {
+      "id": "positioning",
+      "kind": "split",
+      "title": "核心定位",
+      "image": "collab",
+      "points": [
+        "目标用户：需要跨团队协作的项目 Owner。",
+        "核心价值：减少从讨论到正式材料的搬运成本。",
+        "传播钩子：让每一次群聊都能沉淀为可复用资产。"
+      ]
+    },
+    {
+      "id": "campaign-flow",
+      "kind": "flow",
+      "title": "发布流程",
+      "caption": "Agent 把聊天中的任务、风险、素材和负责人沉淀进 IR。",
+      "nodes": [
+        {"id": "brief", "label": "发布 Brief"},
+        {"id": "assets", "label": "素材收集"},
+        {"id": "review", "label": "跨团队评审"},
+        {"id": "launch", "label": "发布上线"},
+        {"id": "retro", "label": "复盘沉淀"}
+      ],
+      "edges": [["brief", "assets"], ["assets", "review"], ["review", "launch"], ["launch", "retro"]]
+    },
+    {
+      "id": "metrics",
+      "kind": "metrics",
+      "title": "发布目标",
+      "image": "metrics",
+      "items": [
+        {"label": "首周试用", "value": "5k", "note": "目标注册用户"},
+        {"label": "销售线索", "value": "800", "note": "MQL 数量"},
+        {"label": "内容触达", "value": "120k", "note": "多渠道曝光"}
+      ]
+    },
+    {
+      "id": "playbook",
+      "kind": "cards",
+      "title": "作战模块",
+      "cards": [
+        {"title": "内容", "body": "官网、公众号、客户案例、销售话术。"},
+        {"title": "活动", "body": "发布会、直播、私域社群、客户圆桌。"},
+        {"title": "销售", "body": "线索分发、异议处理、行业包。"},
+        {"title": "复盘", "body": "数据看板、ROI、下一轮实验。"}
+      ]
+    },
+    {
+      "id": "risks",
+      "kind": "table",
+      "title": "发布风险",
+      "columns": ["风险", "控制动作"],
+      "rows": [
+        ["物料口径不一致", "所有公开材料从 IR 生成，口径改动只在 IR 层确认"],
+        ["负责人不清", "每个任务块绑定 owner 和 deadline"],
+        ["上线延期", "关键路径自动高亮并推送风险提醒"],
+        ["复盘缺失", "发布后自动收集指标并生成 retro 草稿"]
+      ]
+    }
+  ]
+}

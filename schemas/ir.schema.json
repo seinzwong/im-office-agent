@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Industrial IR Demo Schema",
+  "type": "object",
+  "required": ["schemaVersion", "meta", "theme", "assets", "blocks"],
+  "properties": {
+    "schemaVersion": {"const": "0.2.0"},
+    "docId": {"type": "string"},
+    "meta": {
+      "type": "object",
+      "required": ["title", "subtitle", "owner", "date"],
+      "properties": {
+        "title": {"type": "string"},
+        "subtitle": {"type": "string"},
+        "owner": {"type": "string"},
+        "date": {"type": "string"},
+        "audience": {"type": "string"}
+      }
+    },
+    "theme": {"type": "object"},
+    "assets": {"type": "object", "additionalProperties": {"type": "string"}},
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "title"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["cover", "split", "flow", "metrics", "cards", "table", "timeline", "image"]},
+          "title": {"type": "string"}
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
