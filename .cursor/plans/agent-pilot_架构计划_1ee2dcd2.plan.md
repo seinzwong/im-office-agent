@@ -1,24 +1,24 @@
 ---
 name: Agent-Pilot 架构计划
-overview: 机器人 @ 支持 NL 时间窗（默认24h）生成云文档；产出物父目录由配置指定；飞书与 Lark 双栈配置；Web 以应用内嵌 H5 + 授权码/JSSDK 鉴权；lark-cli 执行；编排贯通 IM 与 Web API。
+overview: 机器人 @ 与 NL 时间窗生成云文档；Web 内嵌 H5 勾选来源后按选项生成画板或 PPT 或两者；产出物目录可配置；飞书+Lark 双栈；lark-cli 编排 IM/Web API。
 todos:
   - id: feishu-app-cli
-    content: 自建应用（飞书+Lark 双栈配置）、群消息事件、lark-cli 封装；云文档/画板 parent 使用配置项 drive 文件夹 token
+    content: 自建应用双栈、事件、lark-cli；docs/whiteboard/slides 写入配置的云空间 parent；scope 含幻灯片
     status: pending
   - id: bot-at-mention-doc
     content: 机器人 @ 触发：解析 @ 文案中的自然语言时间窗（否则默认过去24小时）→ im 拉取窗内消息 → LLM 总结 → lark-cli docs 落库与元数据
     status: pending
   - id: orchestrator-api
-    content: 编排服务：飞书/Lark 事件回调与加解密配置 + OAuth 授权码换票（双域名）+ 鉴权 REST；可选 SSE 轮询
+    content: 编排服务：事件回调 + OAuth + 交付任务 API（deliverables 含 whiteboard 与或 slides）；可选 SSE 轮询
     status: pending
-  - id: agent-whiteboard
-    content: Agent-Whiteboard：读取所选文档内容 → 生成画板 DSL/更新 → lark-cli whiteboard，回写 drive 链接
+  - id: agent-deliver
+    content: Agent-Whiteboard 与 Agent-Slides：按任务类型二选一或串联执行；lark-cli whiteboard / slides，产出写配置目录并落库
     status: pending
   - id: web-minimal
-    content: 应用内嵌 H5：JSSDK 初始化 + 授权码登录/换票 + 列表/复选框/生成画板/产出物；双端（飞书/Lark 移动与桌面客户端 WebView）
+    content: 应用内嵌 H5：来源多选 + 产出类型（画板或PPT或全选）+ 一键生成 + 产出物列表；JSSDK 与 OAuth
     status: pending
   - id: demo-script
-    content: 演示脚本：@总结 → 客户端内嵌 H5 列表 → 画板 → 双端；验证产出在配置的云空间目录
+    content: 演示：仅画板、仅PPT、两者全选各一条；双端内嵌 H5；产出在配置目录
     status: pending
 isProject: false
 ---
@@ -41,7 +41,7 @@ isProject: false
 
 ## 业务流程（已定稿）
 
-以下为参赛 MVP 的主链路，对应赛题中 IM → 文档 → 自由画布的组合编排。
+以下为参赛 MVP 的主链路，对应赛题中 IM → 文档 → **画板与/或 PPT** 的交付编排（由用户在 Web 上 **二选一或全选**）。
 
 ```mermaid
 sequenceDiagram
@@ -68,24 +68,45 @@ sequenceDiagram
   Web->>Orch: JSSDK config 后回调 code 换 token 建会话
   Web->>Orch: GET 文档列表 带会话
   Orch-->>Web: 总结文档列表
-  User->>Web: 复选框选择来源文档
-  User->>Web: 点击生成画板
-  Web->>Orch: POST 画板任务 selected_doc_ids
-  Orch->>CLI: docs 读内容
-  Orch->>LLM: 生成画板结构或 DSL
-  Orch->>CLI: whiteboard 创建/更新
-  CLI->>Drive: 画板落指定文件夹
-  Orch->>Orch: 持久化 WhiteboardArtifact
+  User->>Web: 复选框选择来源文档与产出类型
+  User->>Web: 点击生成
+  Web->>Orch: POST 交付任务 selected_doc_ids 与 deliverables
+
+  alt 仅生成画板
+    Orch->>CLI: docs 读内容
+    Orch->>LLM: 生成画板 DSL
+    Orch->>CLI: whiteboard 创建或更新
+    CLI->>Drive: 画板落配置文件夹
+    Orch->>Orch: 持久化 WhiteboardArtifact
+  else 仅生成PPT
+    Orch->>CLI: docs 读内容
+    Orch->>LLM: 生成幻灯片大纲与页要点
+    Orch->>CLI: slides 创建或更新
+    CLI->>Drive: 幻灯片落配置文件夹
+    Orch->>Orch: 持久化 SlideDeckArtifact
+  else 画板与PPT均需要
+    Orch->>CLI: docs 读内容
+    Orch->>LLM: 画板 DSL
+    Orch->>CLI: whiteboard 创建或更新
+    CLI->>Drive: 画板落库
+    Orch->>Orch: 持久化 WhiteboardArtifact
+    Orch->>CLI: docs 读内容
+    Orch->>LLM: 幻灯片大纲与页要点
+    Orch->>CLI: slides 创建或更新
+    CLI->>Drive: 幻灯片落库
+    Orch->>Orch: 持久化 SlideDeckArtifact
+  end
+
   Web->>Orch: 轮询或 GET 任务状态
-  Orch-->>Web: 完成 + 飞书链接
+  Orch-->>Web: 完成与产出链接列表
 ```
 
 | 步骤 | 说明 |
 |------|------|
 | **1. 群聊 @ 机器人** | 在群聊中 @ 机器人即触发一次「总结任务」。用户可在同一条消息里用**自然语言描述希望总结的时间范围**（例如「半小时以内」「今天上午」「从昨天下午到现在」）；编排层先将其**解析为绝对时间区间**（见下），再按区间用 `im` 拉取该群消息并交给 LLM 生成**云文档**。若用户**未给出任何时间窗描述**，则**默认**总结 **过去 24 小时**内该群消息（与「一天」口径对齐，便于实现与验收）。 |
 | **2. Web 查看总结文档列表** | 用户在 **飞书或 Lark 客户端** 内通过 **工作台应用 / 机器人菜单** 打开已配置的 **应用内网页（H5）**；前端加载对应产品线 **JSSDK** 并完成 **授权码登录**（WebView 内跳转授权页 → `redirect_uri` 带 `code` → 后端换票）。登录后请求后端列出**当前用户可见范围内**的总结文档（标题、时间、链接、可选 chat）；元数据与 `document_id` 一致；可见性规则实现阶段按 `open_id`/群成员关系定。 |
-| **3. 选择来源并触发生成画板** | Web 页提供**复选框**勾选一个或多个总结文档作为画板素材来源，单一按钮「**生成画板**」提交异步任务。 |
-| **4. 查看产出物** | 任务完成后，在同一 Web 页的「产出物」区域展示新生成的**画板**（名称、创建时间、飞书内打开链接）。 |
+| **3. 选择来源与产出类型并触发生成** | Web 提供**复选框**勾选一个或多个总结文档作为素材；另用**互斥可组合选项**（如两个勾选框「生成画板」「生成 PPT」，允许 **只选其一** 或 **两项都选**；若均未选则前端校验提示）。单一按钮（如「**开始生成**」）提交异步 **交付任务**，请求体携带 `selected_doc_ids` 与 `deliverables: { whiteboard?, slides? }`。 |
+| **4. 查看产出物** | 任务完成后，在「产出物」区列出本次生成的 **画板链接** 与/或 **幻灯片链接**（类型、名称、时间）；与编排库及飞书侧 artifact 一致。 |
 
 ### 时间窗策略（自然语言 + 默认一天）
 
@@ -114,6 +135,7 @@ flowchart LR
     Orch[编排与持久化]
     A1[Agent-SummaryDoc]
     A2[Agent-Whiteboard]
+    A3[Agent-Slides]
     CLI[lark-cli]
   end
   Mobile --> WebApp
@@ -122,28 +144,32 @@ flowchart LR
   WebApp --> Orch
   Orch --> A1
   Orch --> A2
+  Orch --> A3
   A1 --> CLI
   A2 --> CLI
+  A3 --> CLI
   CLI --> LarkAPI[飞书或Lark开放平台与云空间]
 ```
 
 | 模块 | 职责 |
 |------|------|
 | **机器人（飞书/Lark）** | 监听群消息；识别 **@机器人**；解析同条消息中的 **NL 时间窗**；触发总结流水线；回复文档链接并**回显实际时间范围**；事件与验签随产品线切换配置。 |
-| **应用内嵌 H5** | **JSSDK 初始化** + **授权码换票**；**文档列表**、**复选框**、**生成画板**、**产出物列表**（链接在客户端内打开原生文档/画板）。极简交互；状态可用短轮询。 |
+| **应用内嵌 H5** | **JSSDK** + **授权码换票**；**文档列表**；来源 **多选**；**产出类型**：画板 / PPT **二选一或全选**（两枚勾选框）；**开始生成**；**产出物列表**（客户端内打开链接）。短轮询即可。 |
 | **Agent-SummaryDoc** | **时间窗解析**（NL→区间，含默认一天）→ 消息聚合 + **LLM 总结正文** + `lark-cli` 创建云文档到 **配置指定的云空间父文件夹**。 |
-| **Agent-Whiteboard** | 读取所选文档 + LLM 生成画板 DSL + `lark-cli whiteboard` 写入；产物父目录与文档**同一配置项**（若需分子目录可在配置中拆 `ARTIFACTS_WHITEBOARD_FOLDER_TOKEN`，否则与文档共用）。 |
-| **编排服务** | **飞书/Lark** 事件回调验证与解析；**OAuth 授权码换票**（按产品线选 endpoint）；**SummaryDoc** / **WhiteboardJob** 持久化；鉴权下 REST；可选 SSE/WebSocket（MVP 可用轮询）。 |
+| **Agent-Whiteboard** | 在 `deliverables` 含画板时执行：读文档 + LLM 生成 DSL + `lark-cli whiteboard`；父目录见配置（可与文档同 token 或 `ARTIFACTS_WHITEBOARD_FOLDER_TOKEN`）。 |
+| **Agent-Slides** | 在 `deliverables` 含 PPT 时执行：读文档 + LLM 生成页级结构 + `lark-cli slides`；父目录见配置（可与文档同 token 或 `ARTIFACTS_SLIDES_FOLDER_TOKEN`）。 |
+| **编排服务** | 事件回调、OAuth、**DeliveryJob**（含 `deliverables` 与子步骤状态）；**SummaryDoc** / **WhiteboardArtifact** / **SlideDeckArtifact** 持久化；鉴权 REST；可选 SSE/WebSocket。 |
 
-**赛题覆盖说明**：主链路为 **IM + 文档 + 自由画布**；若后续需加 **PPT**，可在同一 Web 增加第二个按钮调用 `lark-cli slides`，不改变当前四步主叙事。
+**赛题覆盖说明**：主链路覆盖 **IM + 文档**；演示侧通过交付选项同时满足 **自由画布与/或演示文稿（PPT）**——至少演示一种，**推荐编排一条「两者全选」**以体现组合能力。
 
-**lark-cli**：子进程封装、`--format json`；**云空间落点**：创建文档/画板时传入 **配置中的 `folder_token`（或 CLI 支持的目标文件夹参数）**；不在代码中硬编码文件夹 ID。**双栈**：CI/运行时通过不同 **config profile** 或环境变量指向飞书与 Lark 两套应用凭证与 endpoint。
+**lark-cli**：子进程封装、`--format json`；**云空间落点**：创建文档、画板、幻灯片时传入 **配置中的 `folder_token`**（或 CLI 支持的 parent 参数）；不硬编码 ID。**双栈**：**config profile** 或环境变量区分飞书与 Lark。
 
 ### 配置项（部署层，建议文档化）
 
 | 配置键（示例） | 含义 |
 |----------------|------|
-| `ARTIFACTS_DRIVE_FOLDER_TOKEN` | 产出物（文档、画板）在云空间中的 **父文件夹**；必填 |
+| `ARTIFACTS_DRIVE_FOLDER_TOKEN` | 文档/画板/幻灯片等产出物的 **默认父文件夹**；必填 |
+| `ARTIFACTS_WHITEBOARD_FOLDER_TOKEN` / `ARTIFACTS_SLIDES_FOLDER_TOKEN` | 可选：画板与幻灯片分目录时使用 |
 | `LARK_PRODUCT` / `FEISHU_APP_ID` 等 | 区分 **feishu** / **lark** 与对应 App 凭证、回调 URL、Encrypt Key |
 | `OAUTH_REDIRECT_URI` | 授权码回调地址（需同时出现在开放平台「重定向 URL」与 **应用内网页** 可访问路径） |
 | `PUBLIC_WEB_BASE_URL` | H5 对外根地址（飞书/Lark 应用内网页配置处填写） |
@@ -156,18 +182,26 @@ flowchart LR
 
 - **输入**：`chat_id`、触发消息文本（用于 NL 时间窗）、`t0`、时区配置；随后为**解析后的** `[start, end]` 区间内消息列表（`im` 拉取）。
 - **输出**：云文档 `document_id`、标题、父文件夹、`open_url`（飞书或 Lark 域名）；元数据持久化 `resolved_window_start/end` 与可选 `user_time_hint_raw`。
-- **框架**：LangGraph 或轻量 ReAct 均可；至少两个逻辑阶段：**(A) 时间解析**（独立短 prompt + JSON schema）**(B) 总结成文**（会议纪要/讨论结构化）；**(B)** 与 **画板 Agent** 解耦。
+- **框架**：LangGraph 或轻量 ReAct 均可；至少两个逻辑阶段：**(A) 时间解析**（独立短 prompt + JSON schema）**(B) 总结成文**（会议纪要/讨论结构化）；**(B)** 与 **交付类 Agent（画板 / 幻灯片）** 解耦。
 
 ### 1.2 所选文档 → 画板（Agent-Whiteboard）
 
-- **输入**：一个或多个总结文档的标识（服务端已存 `document_id`）。
-- **输出**：画板在云空间的链接；元数据入库供 Web「产出物」列表展示。
-- **实现**：先读文档（`lark-cli docs` 导出/读取），LLM 输出适合画板的结构（如 Mermaid/PlantUML/whiteboard DSL，以 [lark-whiteboard skill](https://github.com/larksuite/cli) 为准），再调用 CLI 创建或更新画板。
+- **输入**：一个或多个总结文档标识；仅当任务 `deliverables.whiteboard === true` 时进入本路径。
+- **输出**：画板在云空间的链接；元数据入库。
+- **实现**：`lark-cli docs` 读正文；LLM → whiteboard DSL（参见 [lark-whiteboard](https://github.com/larksuite/cli)）；`lark-cli whiteboard` 写入。
 
-### 1.3 调研收口
+### 1.3 所选文档 → 幻灯片（Agent-Slides）
+
+- **输入**：同上；仅当 `deliverables.slides === true` 时进入。
+- **输出**：Slides 在云空间的链接；元数据入库。
+- **实现**：`lark-cli docs` 读正文；LLM 输出严格结构的页列表；`lark-cli slides` 创建或追加幻灯片（参见 [lark-slides](https://github.com/larksuite/cli)）。
+
+**两者全选时**：编排层可 **顺序执行**（先画板后幻灯片或反之），失败则子步骤独立重试/回滚策略在实现时定；序列图中 **alt 第三分支** 描述该串联。
+
+### 1.4 调研收口
 
 - 固定 **NL 时间窗 prompt**、**默认 24h** 与 **最大跨度/条数** 常量；版本号写入配置。
-- 一条脚本：带「今天上午」与无时间窗两条用例 → 校验 `im` 查询区间与落库字段 → Web API 能列到该条。
+- 脚本用例：`im` 时间窗两条；另加 **交付任务** `deliverables` 三种组合（仅画板、仅 slides、两者）校验落库与链接。
 
 ---
 
@@ -176,13 +210,13 @@ flowchart LR
 ### 2.1 多端同步（Must-have）
 
 - **MVP 极简做法**：**飞书/Lark 手机客户端与桌面客户端** 分别从工作台打开同一 **应用内嵌 H5** URL；使用**同一套 REST + 轮询任务状态**演示「双端列表与任务状态一致」。若时间有余，再加 WebSocket 推送列表刷新。
-- **真源**：业务元数据在编排库；**文档/画板正文真源**在租户云空间（**父目录由部署配置指定**）。
+- **真源**：业务元数据在编排库；**文档、画板、幻灯片正文真源**在租户云空间（**父目录由部署配置指定**）。
 
 ### 2.2 自然语言
 
 - **主路径**：**@ 行内自然语言**用于**控制总结时间范围**（赛题「自然语言驱动」的显式落点）；群内历史讨论正文仍进入总结模型输入。
 - **@** 为明确触发信号；未写时间窗则走 **默认过去 24 小时**。
-- **可选增强**：Web 上增加一句「补充说明」文本框再生成画板，作为同一按钮请求的附加参数（仍保持页面简单）。
+- **可选增强**：「补充说明」文本框随 **开始生成** 一并提交，供画板与幻灯片两路 prompt 共用（仍保持页面简单）。
 
 ### 2.3 飞书与 Lark 开放平台配置
 
@@ -190,23 +224,23 @@ flowchart LR
 - **OAuth**：两套环境分别配置 **重定向 URL**（`redirect_uri`）、**App ID / App Secret**；授权页域名随 **feishu / lark** 切换；编排服务根据请求 Host 或前端上报的 `product` 选择对应 **换票 endpoint**（**禁止**在前端暴露 Secret）。
 - **JSSDK**：H5 按产品线加载对应 **JSSDK 脚本**并完成 `config`（`appId`、`timestamp`、`signature` 等由后端签发）；处理 **iOS/Android 与 PC WebView** 差异（官方文档中的 UA、调试方式）。
 - **事件订阅**：`im.message.receive_v1`（或等价）；**Encrypt Key**、**Verification Token** 两套应用分别配置；回调 URL 可同一路由通过配置区分验签密钥。
-- **权限**：`im`、云文档、云空间（drive）、画板等与 `lark-cli` 能力对齐的 **scope 并集**；**Web 用户态**与 **CLI 执行态** token 分区存储。
-- **身份**：写文档/画板与 **配置文件夹** 的写入权限一致（user 或 bot 二选一并文档化）；双栈下分别在两个开放平台检查 **云空间权限**。
+- **权限**：`im`、云文档、云空间（drive）、**画板**、**slides（幻灯片）** 等与 `lark-cli` 能力对齐的 **scope 并集**；**Web 用户态**与 **CLI 执行态** token 分区存储。
+- **身份**：写文档、画板、幻灯片与 **配置文件夹** 的写入权限一致（user 或 bot 二选一并文档化）；双栈下分别在两个开放平台检查 **云空间与 slides scope**。
 
 ### 2.4 演示脚本（与已定流程一致）
 
 1. 群内 **@ 机器人**（含/不含时间窗各一次）→ 回复含**实际时间窗**；云文档落在 **配置指定** 的云空间文件夹。
 2. **手机与桌面客户端** 从工作台进入 **应用内嵌 H5** → **授权码登录** → 列表一致（可各选飞书或 Lark 一条链路演示，或两条都备）。
-3. **勾选** 一篇或多篇文档 → **生成画板** → 完成后在 **产出物** 区出现画板链接。
-4. 强调 **lark-cli** 三次域：**im**、**docs**、**whiteboard**。
+3. **勾选** 文档后分别演示：**仅画板**、**仅 PPT**、**两者全选** → **产出物** 区链接正确。
+4. 强调 **lark-cli** 域：**im**、**docs**、**whiteboard**、**slides**（按演示勾选实际调用）。
 
 ---
 
 ## 仓库与部署建议（实现阶段）
 
-- `services/orchestrator` — 飞书/Lark 回调、DB、文档列表 API、画板任务 API、JSSDK 签名接口。
+- `services/orchestrator` — 飞书/Lark 回调、DB、文档列表 API、**交付任务** API（解析 `deliverables`）、JSSDK 签名接口。
 - `services/agent-summary` — 消息→文档（可内嵌于 orchestrator 小团队时）。
-- `services/agent-whiteboard` — 文档→画板（亦可进程内模块）。
+- `services/agent-whiteboard` / `services/agent-slides` — 文档→画板 / 文档→幻灯片（或同包内两模块）。
 - `apps/web` — 极简 H5：**JSSDK 接入** + **`/oauth/callback`** 接收 `code`；构建产物静态托管，URL 填入开放平台「应用内网页」。
 - `packages/lark-cli-driver` — CLI 调用、超时、脱敏；**父文件夹 token 从配置注入**（不写死仓库）。
 - `config/` 与 `docs/demo-script.md` — 文档化 **飞书/Lark** 与 **`ARTIFACTS_DRIVE_FOLDER_TOKEN`** 等变量。
@@ -219,7 +253,7 @@ flowchart LR
 |------|------|
 | 群消息量过大 | 时间窗 + 条数上限 + 截断策略 |
 | NL 时间解析歧义/幻觉 | JSON schema 校验 + 最大跨度夹逼 + 回复中回显区间便于人工发现 |
-| 画板 DSL 复杂 | MVP 用「结构化分区 + 少量节点」模板，逐步加 richness |
+| 画板 DSL 或 Slides 结构复杂 | MVP 模板化页数与节点数；两者全选时明确顺序与失败子状态 |
 | 权限导致文档不在目标文件夹 | **配置项**使用管理员预建文件夹并授权应用/用户；双栈分别在两端控制台核对 drive scope |
 | 应用内 WebView 与 OAuth 兼容 | 严格按官方「应用内网页 + 授权」文档；`redirect_uri` 与 JSSDK 安全域名一致 |
 
@@ -229,4 +263,4 @@ flowchart LR
 
 1. **Week 1**：任选一条产品线跑通应用 + **配置文件夹** + @ 触发 + 首篇文档 + 机器人回链；再复制配置接第二条产品线。
 2. **Week 2**：DB + 双栈 OAuth + JSSDK 签发接口 + 应用内嵌 H5（登录 + 列表）。
-3. **Week 3**：画板任务 + 复选框选源 + 产出物列表 + 双端演示彩排；按需加 PPT 或 WS 加分项。
+3. **Week 3**：交付任务（画板与或 PPT）+ `deliverables` 三态验收 + 双端演示；可选 WS 加分项。
