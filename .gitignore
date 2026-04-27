@@ -1,1 +1,15 @@
 .DS_Store
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.pyc
+.env
+.env.example
+.env.local
+node_modules/
+dist/
+*.db
+.coverage
+htmlcov/
+.vscode/

@@ -1,0 +1,193 @@
+openapi: 3.0.3
+info:
+  title: Agents 统一交互协议
+  version: 1.0.0
+  description: |
+    单一端点、信封 + action 扩展。Gateway 与所有外部 Agents 经此协议通信。
+
+servers:
+  - url: "{baseUrl}"
+    variables:
+      baseUrl:
+        default: http://127.0.0.1:18080
+
+paths:
+  /v1/invoke:
+    post:
+      operationId: agentInvoke
+      summary: 统一调用入口
+      security:
+        - AgentsM2M: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InvokeRequest"
+      responses:
+        "200":
+          description: 同步成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvokeResponse"
+        "401":
+          description: 鉴权失败
+        "429":
+          description: 限流
+        "503":
+          description: 服务不可用
+
+components:
+  securitySchemes:
+    AgentsM2M:
+      type: http
+      scheme: bearer
+      bearerFormat: m2m-token
+
+  schemas:
+    InvokeRequest:
+      type: object
+      required:
+        - protocol_version
+        - request_id
+        - action
+        - payload
+      properties:
+        protocol_version:
+          type: integer
+          example: 1
+        request_id:
+          type: string
+        idempotency_key:
+          type: string
+        trace_id:
+          type: string
+        action:
+          type: string
+          enum:
+            - summary_from_chat
+            - deliver_whiteboard
+            - deliver_slides
+        context:
+          $ref: "#/components/schemas/Context"
+        payload:
+          $ref: "#/components/schemas/AnyPayload"
+      additionalProperties: true
+
+    Context:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        locale:
+          type: string
+        user_open_id:
+          type: string
+        task_ref:
+          type: string
+      additionalProperties: true
+
+    AnyPayload:
+      oneOf:
+        - $ref: "#/components/schemas/PayloadSummaryFromChat"
+        - $ref: "#/components/schemas/PayloadDeliver"
+      description: 视 action 而定，OpenAPI 3.1 下可迁移为 discriminator
+
+    PayloadSummaryFromChat:
+      type: object
+      required:
+        - chat_id
+        - message_text_aggregated
+        - time_hint_text
+        - default_window_end_unix
+      properties:
+        chat_id:
+          type: string
+        message_text_aggregated:
+          type: string
+        time_hint_text:
+          type: string
+          description: 用户 @ 时附带时间窗自然语言，可为空
+        default_window_end_unix:
+          type: integer
+          description: 消息 t0
+
+    PayloadDeliver:
+      type: object
+      required:
+        - document_id
+        - body_plain
+      properties:
+        document_id:
+          type: string
+        body_plain:
+          type: string
+
+    InvokeResponse:
+      type: object
+      required:
+        - protocol_version
+        - request_id
+        - ok
+      properties:
+        protocol_version:
+          type: integer
+        request_id:
+          type: string
+        ok:
+          type: boolean
+        error:
+          $ref: "#/components/schemas/AgentError"
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/ResultSummaryFromChat"
+            - $ref: "#/components/schemas/ResultDeliver"
+      additionalProperties: true
+
+    AgentError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ResultSummaryFromChat:
+      type: object
+      properties:
+        time_window:
+          $ref: "#/components/schemas/TimeWindow"
+        doc_title:
+          type: string
+        doc_content_xml:
+          type: string
+        doc_open_url:
+          type: string
+      description: Mock 可省略 doc_open_url，由 Gateway 用 CLI 写入后填充
+
+    TimeWindow:
+      type: object
+      required: [start_unix, end_unix]
+      properties:
+        start_unix:
+          type: integer
+        end_unix:
+          type: integer
+        label:
+          type: string
+
+    ResultDeliver:
+      type: object
+      properties:
+        whiteboard_dsl:
+          type: string
+        slide_xml_slides:
+          type: string
+        notes:
+          type: string
+      description: deliver_slides 使用 slide_xml_slides； deliver_whiteboard 使用 whiteboard_dsl
