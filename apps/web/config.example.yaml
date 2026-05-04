@@ -1,0 +1,6 @@
+# 前端本地开发：复制为同目录 config.yaml 覆盖（config.yaml 已加入 .gitignore）
+dev:
+  host: "127.0.0.1"
+  port: 5173
+  # Vite 开发服务器将 /api、/lark、/health 代理到该 Gateway 地址
+  gateway_proxy_target: "http://127.0.0.1:8000"

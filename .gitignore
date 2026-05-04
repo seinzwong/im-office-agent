@@ -6,6 +6,8 @@ venv/
 *.pyc
 .env
 .env.local
+services/gateway/gateway.yaml
+apps/web/config.yaml
 node_modules/
 dist/
 *.db

@@ -1,0 +1,40 @@
+# Gateway 主配置：复制本文件为同目录 gateway.yaml 后修改（gateway.yaml 勿提交密钥）
+# 键名与代码中 Settings 字段一致（snake_case）。
+# 若某键留空，Gateway 仍会尝试从「仓库根 .env」「本目录 .env」及进程环境变量（如 LARK_APP_ID）补齐，便于与旧 .env 工作流并存。
+
+# 公网/本地 Gateway 根地址（事件回调、OAuth 文档中的 URL）
+gateway_public_base_url: http://127.0.0.1:8000
+
+# 飞书云盘目标目录 folder_token；接真飞书时建议填写。dev_skip_lark 为 true 时列表可为占位
+artifacts_drive_folder_token: ""
+dev_skip_lark: true
+
+# 外部 Agents：单实例填 agents_base_url + agents_m2m_token；
+# 多实例时复制 app/agents/agents.example.yaml 为 app/agents/agents.yaml，并填写 agents_registry_path（相对本目录）
+agents_base_url: https://你的-agents.example.com
+agents_m2m_token: dev-m2m-secret
+agents_registry_path: ""
+
+# 飞书开放平台应用凭证
+lark_app_id: ""
+lark_app_secret: ""
+
+# 飞书事件加解密（未启用事件可留空）
+lark_event_encrypt_key: ""
+lark_verification_token: ""
+
+# 前端 H5 与 OAuth；须与开放平台「网页应用」域名/回调一致
+public_web_base_url: http://127.0.0.1:5173
+oauth_redirect_uri: http://127.0.0.1:8000/api/v1/auth/callback
+
+# Cookie 会话签名（生产务必更换）
+session_secret: change-me-in-production
+
+# OpenAPI 域名（Lark 国际站可改为 https://open.larksuite.com 等）
+lark_base_url: https://open.feishu.cn
+
+# 保留字段；Gateway 已走 OpenAPI
+lark_cli_path: lark-cli
+
+# CORS 允许的前端来源，逗号分隔
+cors_origins: http://127.0.0.1:5173,http://localhost:5173

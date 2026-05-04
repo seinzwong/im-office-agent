@@ -1,28 +1,147 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
+
+log = logging.getLogger(__name__)
+
+# 与历史 .env 变量名一致：YAML 中某键为空时，可从仓库根 / gateway 目录 .env 或进程环境补齐。
+_ENV_TO_FIELD: tuple[tuple[str, str], ...] = (
+    ("GATEWAY_PUBLIC_BASE_URL", "gateway_public_base_url"),
+    ("PUBLIC_WEB_BASE_URL", "public_web_base_url"),
+    ("OAUTH_REDIRECT_URI", "oauth_redirect_uri"),
+    ("SESSION_SECRET", "session_secret"),
+    ("ARTIFACTS_DRIVE_FOLDER_TOKEN", "artifacts_drive_folder_token"),
+    ("DEV_SKIP_LARK", "dev_skip_lark"),
+    ("AGENTS_BASE_URL", "agents_base_url"),
+    ("AGENTS_M2M_TOKEN", "agents_m2m_token"),
+    ("AGENTS_REGISTRY_PATH", "agents_registry_path"),
+    ("LARK_APP_ID", "lark_app_id"),
+    ("LARK_APP_SECRET", "lark_app_secret"),
+    ("LARK_EVENT_ENCRYPT_KEY", "lark_event_encrypt_key"),
+    ("LARK_VERIFICATION_TOKEN", "lark_verification_token"),
+    ("LARK_BASE_URL", "lark_base_url"),
+    ("LARK_CLI_PATH", "lark_cli_path"),
+    ("CORS_ORIGINS", "cors_origins"),
+)
 
 
-def _env_file_tuple() -> tuple[str, ...]:
-    """仓库根或 gateway 目录的 .env；后者覆盖前者。避免从 services/gateway 启动时读不到根目录 .env。"""
-    here = Path(__file__).resolve()
-    gateway_dir = here.parents[1]
-    repo_root = here.parents[3]
-    ordered: list[Path] = []
-    for p in (repo_root / ".env", gateway_dir / ".env"):
-        if p.is_file():
-            ordered.append(p)
-    return tuple(str(p) for p in ordered) if ordered else (".env",)
+def _gateway_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=_env_file_tuple(),
-        extra="ignore",
-        case_sensitive=False,
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _is_empty(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, str) and not v.strip():
+        return True
+    return False
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if val.startswith('"') and val.endswith('"') and len(val) >= 2:
+            val = val[1:-1].replace('\\"', '"')
+        elif val.startswith("'") and val.endswith("'") and len(val) >= 2:
+            val = val[1:-1]
+        out[key] = val
+    return out
+
+
+def _coerce_field(field: str, raw: str) -> Any:
+    if field == "dev_skip_lark":
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return raw
+
+
+def _merge_env_into(data: dict[str, Any]) -> dict[str, Any]:
+    """YAML 为主；空键用仓库根 .env → gateway/.env 补齐；最后进程环境变量覆盖非空项。"""
+    out: dict[str, Any] = dict(data)
+    filled_from_file = False
+
+    for dotenv_path in (_repo_root() / ".env", _gateway_dir() / ".env"):
+        parsed = _parse_dotenv(dotenv_path)
+        for env_key, field in _ENV_TO_FIELD:
+            if env_key not in parsed:
+                continue
+            raw = parsed[env_key]
+            if _is_empty(raw):
+                continue
+            if _is_empty(out.get(field)):
+                out[field] = _coerce_field(field, raw)
+                filled_from_file = True
+
+    if filled_from_file:
+        log.info("配置：已从 .env 文件补齐 YAML 中的空项（仓库根或 services/gateway）")
+
+    for env_key, field in _ENV_TO_FIELD:
+        raw = os.environ.get(env_key)
+        if raw is None or not str(raw).strip():
+            continue
+        out[field] = _coerce_field(field, str(raw).strip())
+
+    return out
+
+
+def _load_yaml_dict() -> dict[str, Any]:
+    """从 services/gateway 目录读取 gateway.yaml，否则回退 gateway.example.yaml。"""
+    d = _gateway_dir()
+    candidates = [
+        (d / "gateway.yaml", False),
+        (d / "gateway.example.yaml", True),
+    ]
+    for path, is_example in candidates:
+        if not path.is_file():
+            continue
+        if is_example:
+            log.info(
+                "配置：使用 %s（可复制为 gateway.yaml 覆盖）",
+                path.name,
+            )
+        with path.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path.name} 根节点必须为 mapping")
+        return raw
+    log.warning(
+        "配置：未找到 gateway.yaml / gateway.example.yaml，使用代码内默认值",
     )
+    return {}
+
+
+def _load_settings_dict() -> dict[str, Any]:
+    return _merge_env_into(_load_yaml_dict())
+
+
+class Settings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
     gateway_public_base_url: str = "http://127.0.0.1:8000"
     public_web_base_url: str = "http://127.0.0.1:5173"
@@ -37,19 +156,16 @@ class Settings(BaseSettings):
     lark_app_secret: str = ""
     lark_event_encrypt_key: str = ""
     lark_verification_token: str = ""
-    lark_base_url: str = "https://open.feishu.cn"  # Lark 国际版见文档改 open.larksuite.com
+    lark_base_url: str = "https://open.feishu.cn"
 
-    # 云空间/文档库目标目录 folder_token；生产应配置。仅开发可在 DEV_SKIP_LARK=true 时留空（列表为占位、总结不落盘）。
     artifacts_drive_folder_token: str = ""
-    dev_skip_lark: bool = False  # True 时跳过飞书 OpenAPI 与真实落盘
+    dev_skip_lark: bool = False
 
-    # 未设置 AGENTS_REGISTRY_PATH 时：所有 action 共用这一对。
-    agents_base_url: str = ""  # 如 https://agents.internal.example
+    agents_base_url: str = ""
     agents_m2m_token: str = "dev-m2m-secret"
-    # 指向 YAML 注册表（相对路径相对 services/gateway 目录）；设置后按 routing 分流各 action。
     agents_registry_path: str = ""
 
-    lark_cli_path: str = "lark-cli"  # 保留字段；Gateway 云盘/文档已改走 OpenAPI，不再调用 CLI
+    lark_cli_path: str = "lark-cli"
 
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
@@ -60,4 +176,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    data = _load_settings_dict()
+    return Settings.model_validate(data)
+
+
+def clear_settings_cache() -> None:
+    """测试或热重载时清空缓存。"""
+    get_settings.cache_clear()

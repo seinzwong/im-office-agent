@@ -62,8 +62,8 @@ class LoadedAgentsRegistry:
         tok = (entry.m2m_token or self._default_m2m).strip()
         if not tok:
             raise ValueError(
-                f"agents registry: no m2m_token for agent {aid!r} and "
-                "AGENTS_M2M_TOKEN is empty"
+                "agents registry: no m2m_token for agent "
+                f"{aid!r} and agents_m2m_token in gateway.yaml is empty"
             )
         return base, tok
 
@@ -89,12 +89,12 @@ def init_registry_from_settings(s: Settings) -> None:
     raw = (s.agents_registry_path or "").strip()
     if not raw:
         _RegistryHolder.instance = None
-        log.info("agents registry: disabled (set AGENTS_REGISTRY_PATH to enable)")
+        log.info("agents registry: disabled (set agents_registry_path in gateway.yaml to enable)")
         return
     path = _resolve_registry_path(s)
     if not path.is_file():
         raise FileNotFoundError(
-            f"AGENTS_REGISTRY_PATH resolved to {path} but file does not exist"
+            f"agents_registry_path resolved to {path} but file does not exist"
         )
     with open(path, encoding="utf-8") as f:
         raw_data: Any = yaml.safe_load(f)
@@ -118,12 +118,12 @@ def resolve_agent_endpoint(action: str, s: Settings) -> tuple[str, str]:
     base = (s.agents_base_url or "").strip().rstrip("/")
     if not base:
         raise ValueError(
-            "AGENTS_BASE_URL is not configured (or set AGENTS_REGISTRY_PATH to a "
-            "valid YAML)"
+            "agents_base_url is not configured in gateway.yaml (or set "
+            "agents_registry_path to a valid agents YAML)"
         )
     tok = (s.agents_m2m_token or "").strip()
     if not tok:
         raise ValueError(
-            "AGENTS_M2M_TOKEN is empty; configure M2M token for agents"
+            "agents_m2m_token is empty in gateway.yaml; set it for agents auth"
         )
     return base, tok

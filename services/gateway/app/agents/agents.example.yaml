@@ -1,6 +1,7 @@
-# 多 Agent 注册表示例：复制为 config/agents.yaml（或任意路径）并通过 AGENTS_REGISTRY_PATH 指向。
+# 多 Agent 注册表示例：复制本文件为同目录下的 agents.yaml，并在同级的 gateway.yaml 中设置
+# agents_registry_path: app/agents/agents.yaml（路径相对 services/gateway）。
 # 各 Agent 仍实现同一协议 POST {base_url}/v1/invoke；Gateway 按 action 选择目标。
-# 未写 m2m_token 的条目使用环境变量 AGENTS_M2M_TOKEN。
+# 未写 m2m_token 的条目使用 gateway.yaml 中的 agents_m2m_token。
 
 agents:
   summary:
