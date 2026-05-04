@@ -1,18 +1,66 @@
-# Agents 统一交互协议
+# Agents Protocol
 
-实现方：外部 Agents 服务；本仓库 Gateway 仅作为 **HTTP 客户端** 按约定调用。
+Gateway calls external agent services with a stable HTTP JSON protocol.
 
-**协议全文（端点、信封、各 action 的 payload/result、错误约定）以 [services/gateway/README.md](../services/gateway/README.md) 中「Agents 调用协议」章节为准。**
+## Endpoint
 
-## 路由与配置（摘要）
+| Item | Value |
+| --- | --- |
+| Method | `POST` |
+| URL | `{base_url}/v1/invoke` |
+| Auth | `Authorization: Bearer <M2M_TOKEN>` |
+| Content type | `application/json` |
 
-- **端点**：`POST {base_url}/v1/invoke`；`base_url` 来自 **`gateway.yaml`** 的 `agents_base_url`，或由注册表按 `action` 解析。
-- **鉴权**：`Authorization: Bearer <M2M_TOKEN>`（与 [integrations/gateway-agents.md](integrations/gateway-agents.md) 中的 `agents_m2m_token` / 各实例 token 一致）。
+`base_url` comes from `agents_base_url` in `services/gateway/gateway.yaml`, or from the multi-agent registry referenced by `agents_registry_path`.
 
-## Gateway 多实例路由
+## Request
 
-部署多个 Agents 时，各实例仍实现同一 `POST /v1/invoke`。Gateway 通过 `gateway.yaml` 的 `agents_registry_path` 指向的 YAML，将 `summary_from_chat`、`deliver_whiteboard`、`deliver_slides` 路由到不同 `base_url`。示例见 [`services/gateway/app/agents/agents.example.yaml`](../services/gateway/app/agents/agents.example.yaml)。
+```json
+{
+  "protocol_version": 1,
+  "request_id": "uuid",
+  "idempotency_key": "uuid",
+  "trace_id": "trace-id",
+  "action": "summary_from_chat",
+  "context": {},
+  "payload": {}
+}
+```
 
-## 错误码映射（摘要）
+## Response
 
-`ok: false` 时返回 `error: { code, message, details? }`；与前端/Bot 文案映射见 [gateway-agents.md](integrations/gateway-agents.md)。
+```json
+{
+  "protocol_version": 1,
+  "request_id": "uuid",
+  "ok": true,
+  "result": {}
+}
+```
+
+When `ok` is `false`, return:
+
+```json
+{
+  "protocol_version": 1,
+  "request_id": "uuid",
+  "ok": false,
+  "error": {
+    "code": "PAYLOAD_INVALID",
+    "message": "Human readable error",
+    "details": {}
+  }
+}
+```
+
+## Actions
+
+| Action | Payload | Result |
+| --- | --- | --- |
+| `summary_from_chat` | `chat_id`, `message_text_aggregated`, `time_hint_text`, `default_window_end_unix` | `time_window`, `doc_title`, `doc_content_xml` |
+| `deliver_whiteboard` | `document_id`, `body_plain` | `whiteboard_dsl`, optional `notes` |
+| `deliver_slides` | `document_id`, `body_plain` | `slide_xml_slides`, optional `notes` |
+
+## Registry
+
+For multiple agent services, copy `services/agent/agents.example.yaml` to `services/agent/agents.yaml` and set `agents_registry_path: ../agent/agents.yaml` in `services/gateway/gateway.yaml`.

@@ -1,0 +1,2 @@
+"""Feishu event ingestion package."""
+

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import httpx
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from ..config import Settings
+from services.gateway.config import Settings, get_settings
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +76,7 @@ class _RegistryHolder:
 
 
 def _gateway_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[1] / "gateway"
 
 
 def _resolve_registry_path(s: Settings) -> Path:
@@ -85,7 +88,7 @@ def _resolve_registry_path(s: Settings) -> Path:
 
 
 def init_registry_from_settings(s: Settings) -> None:
-    """在应用启动时调用：加载 YAML 或关闭注册表模式。"""
+    """Load the registry YAML at app startup, or disable registry mode."""
     raw = (s.agents_registry_path or "").strip()
     if not raw:
         _RegistryHolder.instance = None
@@ -106,7 +109,7 @@ def init_registry_from_settings(s: Settings) -> None:
 
 
 def resolve_agent_endpoint(action: str, s: Settings) -> tuple[str, str]:
-    """返回 (base_url_without_trailing_slash, m2m_token)。"""
+    """Return (base_url_without_trailing_slash, m2m_token)."""
     if action not in PROTOCOL_ACTIONS:
         raise ValueError(
             f"Unknown agents action {action!r}; expected one of "
@@ -127,3 +130,50 @@ def resolve_agent_endpoint(action: str, s: Settings) -> tuple[str, str]:
             "agents_m2m_token is empty in gateway.yaml; set it for agents auth"
         )
     return base, tok
+
+
+class AgentsClient:
+    def __init__(self) -> None:
+        self._client = httpx.Client(timeout=120.0)
+
+    def invoke(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        context: Optional[dict[str, Any]] = None,
+        trace_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "protocol_version": 1,
+            "request_id": str(uuid.uuid4()),
+            "idempotency_key": str(uuid.uuid4()),
+            "trace_id": trace_id or f"tr-{int(time.time())}",
+            "action": action,
+            "payload": payload,
+        }
+        if context:
+            body["context"] = context
+        s = get_settings()
+        base, token = resolve_agent_endpoint(action, s)
+        url = base + "/v1/invoke"
+        r = self._client.post(
+            url,
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def close(self) -> None:
+        self._client.close()
+
+
+__all__ = [
+    "AgentEntry",
+    "AgentsClient",
+    "AgentsRegistryFile",
+    "LoadedAgentsRegistry",
+    "PROTOCOL_ACTIONS",
+    "init_registry_from_settings",
+    "resolve_agent_endpoint",
+]

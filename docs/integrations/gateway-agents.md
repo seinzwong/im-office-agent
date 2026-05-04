@@ -1,39 +1,55 @@
-# Gateway 与 外部 Agents 对接
+# Gateway Agents Integration
 
-- **只经 HTTP**：Gateway 为唯一调用方，Agents 不连前端、不直持 `lark-cli`。
-- **协议**：[../agents-protocol.md](../agents-protocol.md)；正文见 [../../services/gateway/README.md](../../services/gateway/README.md) 内「Agents 调用协议」
-- **超时**：`summary_from_chat` 建议 30–60s，交付 60–120s（按部署配置）。
+Gateway delegates AI work to external agent services. Each service implements the same endpoint:
 
-## 单实例（默认）
+```text
+POST {base_url}/v1/invoke
+Authorization: Bearer <M2M_TOKEN>
+```
 
-在 **`services/gateway/gateway.yaml`**（模板见 [`gateway.example.yaml`](../../services/gateway/gateway.example.yaml)）中配置：
+## Single Agent Service
 
-- **基址**：`agents_base_url`（所有 `action` 共用）
-- **鉴权**：`agents_m2m_token`（对应 `Authorization: Bearer …`）
+Set these values in `services/gateway/gateway.yaml`:
 
-## 多实例（注册表）
+```yaml
+agents_base_url: https://your-agents.example.com
+agents_m2m_token: dev-m2m-secret
+agents_registry_path: ""
+```
 
-当在 **`gateway.yaml`** 中设置 **`agents_registry_path`** 时，Gateway 在启动时加载 YAML，按 **`routing` 中的 `action` → `agent_id`** 选择 `POST {base_url}/v1/invoke` 的目标；信封与单实例模式相同。
+## Multiple Agent Services
 
-- 路径：可为绝对路径，或**相对 `services/gateway` 目录**的相对路径（例如 `app/agents/agents.yaml`）。
-- 结构：见与代码同目录的示例 [`../../services/gateway/app/agents/agents.example.yaml`](../../services/gateway/app/agents/agents.example.yaml)。
-- **`routing`**：必须包含协议中的三个 `action`：`summary_from_chat`、`deliver_whiteboard`、`deliver_slides`。
-- **`agents`**：每个 `agent_id` 至少含 `base_url`；`m2m_token` 可选，缺省时使用 **`gateway.yaml`** 中的 `agents_m2m_token`。
+Copy the registry example:
 
-未设置 `agents_registry_path` 时，行为与仅配置 `agents_base_url` 一致。
+```bash
+cp services/agent/agents.example.yaml services/agent/agents.yaml
+```
 
-单实例与多实例的键名均见 [`gateway.example.yaml`](../../services/gateway/gateway.example.yaml)。
+Set this in `services/gateway/gateway.yaml`:
 
-## 错误码映射（建议）
+```yaml
+agents_registry_path: ../agent/agents.yaml
+```
 
-| Agents `error.code` | 前端/Bot 用户文案 |
-|---------------------|-------------------|
-| `INVALID_TIME_WINDOW` | 无法解析时间范围，已使用默认过去 24 小时。 |
-| `UPSTREAM_LLM`        | 生成服务繁忙，请重试。 |
-| `PAYLOAD_INVALID`     | 参数错误。 |
+The registry maps protocol actions to agent IDs:
 
-> 在 Gateway 内维护一张表，避免把内部堆栈直接暴露到 IM。
+```yaml
+routing:
+  summary_from_chat: summary
+  deliver_whiteboard: whiteboard
+  deliver_slides: slides
+```
 
-## 本地与联调
+Each `agents.<agent_id>` entry must include `base_url`. `m2m_token` is optional; when omitted, Gateway uses `agents_m2m_token` from `gateway.yaml`.
 
-部署符合上述 OpenAPI 的外部 Agents 后，在 **`gateway.yaml`** 中完成单实例或注册表相关配置，再启动 Gateway 与前端即可联调。
+## Error Mapping
+
+Agents should prefer HTTP 200 with `ok: false` for business errors. Reserve HTTP errors for transport/auth/rate-limit/unavailable cases.
+
+Suggested error codes:
+
+| Code | Meaning |
+| --- | --- |
+| `INVALID_TIME_WINDOW` | The time hint could not be parsed. |
+| `UPSTREAM_LLM` | Model/provider call failed. |
+| `PAYLOAD_INVALID` | Request payload is invalid. |

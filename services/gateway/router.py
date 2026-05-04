@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import urllib.parse
 from typing import Any, Optional
 
@@ -16,33 +17,33 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from ..config import Settings, get_settings
-from ..drive_artifacts import list_artifacts
-from ..pipelines.delivery import run_deliver_artifacts
-from ..pipelines.summary_from_event import run_summary_for_chat
+from .config import Settings, get_settings
+from .context_hygiene.context_packet_builder import run_deliver_artifacts
+from .context_hygiene.topic_summary_service import run_summary_for_chat
+from .event_gateway.feishu_event_handler import router as feishu_event_router
+from .raw_timeline.raw_timeline_service import list_artifacts
 
 log = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1")
+api_router = APIRouter(prefix="/api/v1")
 
 
-@router.get("/me")
+@api_router.get("/me")
 def me(request: Request) -> dict[str, Any]:
     uid = request.session.get("user_open_id", "anonymous")
     return {"user_open_id": uid, "authenticated": uid != "anonymous"}
 
 
-@router.post("/auth/dev")
+@api_router.post("/auth/dev")
 def auth_dev(request: Request) -> dict[str, str]:
-    """仅开发：写入会话，不经过飞书 OAuth。"""
     request.session["user_open_id"] = "dev-open-id"
     return {"ok": "true"}
 
 
-@router.get("/auth/login")
+@api_router.get("/auth/login")
 def auth_login(s: Settings = Depends(get_settings)) -> Response:
     if not s.lark_app_id:
         return Response(
-            content="未配置 LARK_APP_ID。开发环境可 POST /api/v1/auth/dev 登录。",
+            content="LARK_APP_ID is not configured. Use POST /api/v1/auth/dev in development.",
             media_type="text/plain; charset=utf-8",
         )
     params = {
@@ -50,24 +51,23 @@ def auth_login(s: Settings = Depends(get_settings)) -> Response:
         "redirect_uri": s.oauth_redirect_uri,
         "state": "x",
     }
-    u = s.lark_base_url + "/open-apis/authen/v1/authorize?" + urllib.parse.urlencode(
+    url = s.lark_base_url + "/open-apis/authen/v1/authorize?" + urllib.parse.urlencode(
         {**params, "response_type": "code", "scope": "openid contact:user.base:readonly"}
     )
-    return Response(status_code=302, headers={"Location": u})
+    return Response(status_code=302, headers={"Location": url})
 
 
-@router.get("/auth/callback")
+@api_router.get("/auth/callback")
 def auth_callback(
     request: Request,
     code: str = "",
     s: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     if s.lark_app_id and code:
-        # 使用官方接口换 user_access_token（SaaS 侧可能不同，MVP 占位）
         try:
-            u = s.lark_base_url + "/open-apis/authen/v1/access_token"
-            r = httpx.post(
-                u,
+            url = s.lark_base_url + "/open-apis/authen/v1/access_token"
+            response = httpx.post(
+                url,
                 json={
                     "grant_type": "authorization_code",
                     "code": code,
@@ -76,18 +76,17 @@ def auth_callback(
                 },
                 timeout=30.0,
             )
-            r.raise_for_status()
-            j = r.json()
-            d = (j or {}).get("data") or {}
-            oid = d.get("user_id") or d.get("open_id") or "oauth-user"
-            request.session["user_open_id"] = str(oid)
-        except Exception as e:  # noqa: BLE001
-            log.warning("OAuth exchange: %s", e)
+            response.raise_for_status()
+            data = (response.json() or {}).get("data") or {}
+            user_id = data.get("user_id") or data.get("open_id") or "oauth-user"
+            request.session["user_open_id"] = str(user_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("OAuth exchange failed: %s", exc)
             request.session["user_open_id"] = "dev-oauth-fallback"
     return {"ok": "true"}
 
 
-@router.get("/artifacts")
+@api_router.get("/artifacts")
 def list_artifacts_route() -> dict[str, Any]:
     return {"artifacts": list_artifacts()}
 
@@ -99,35 +98,27 @@ class DeliverIn(BaseModel):
     )
 
 
-@router.post("/deliver", status_code=status.HTTP_202_ACCEPTED)
-def deliver(
-    body: DeliverIn,
-    background_tasks: BackgroundTasks,
-) -> dict[str, str]:
-    w = bool(body.deliverables.get("whiteboard", True))
-    sl = bool(body.deliverables.get("slides", False))
-    if not w and not sl:
-        raise HTTPException(400, "请至少选择画板或 PPT 之一")
+@api_router.post("/deliver", status_code=status.HTTP_202_ACCEPTED)
+def deliver(body: DeliverIn, background_tasks: BackgroundTasks) -> dict[str, str]:
+    want_whiteboard = bool(body.deliverables.get("whiteboard", True))
+    want_slides = bool(body.deliverables.get("slides", False))
+    if not want_whiteboard and not want_slides:
+        raise HTTPException(400, "Select at least one deliverable: whiteboard or slides")
     background_tasks.add_task(
         run_deliver_artifacts,
         body.file_tokens,
-        w,
-        sl,
+        want_whiteboard,
+        want_slides,
     )
-    return {
-        "status": "accepted",
-        "message": "已提交生成，请稍后在飞书该目录中刷新本页以查看新文件。",
-    }
+    return {"status": "accepted", "message": "Delivery task accepted"}
 
 
 class JssdkIn(BaseModel):
     url: str = ""
 
 
-@router.post("/jssdk/config")
-def jssdk_config(
-    p: JssdkIn, s: Settings = Depends(get_settings)
-) -> dict[str, Any]:
+@api_router.post("/jssdk/config")
+def jssdk_config(p: JssdkIn, s: Settings = Depends(get_settings)) -> dict[str, Any]:
     url = (p.url or "")[:2000]
     if not s.lark_app_id:
         return {
@@ -150,33 +141,36 @@ class DevTriggerIn(BaseModel):
     chat_id: str = "oc_dev"
     time_hint: str = ""
     t0_unix: Optional[int] = None
-    aggregate_text: str = "示例：讨论 A 与 讨论 B 两条消息"
+    aggregate_text: str = "Summarize project A and project B discussion."
 
 
-@router.post("/dev/trigger-summary")
+@api_router.post("/dev/trigger-summary")
 def dev_trigger(body: DevTriggerIn) -> dict[str, str]:
-    t0 = body.t0_unix
-    if t0 is None:
-        import time
-
-        t0 = int(time.time())
-    d = run_summary_for_chat(
+    t0 = body.t0_unix or int(time.time())
+    result = run_summary_for_chat(
         body.chat_id,
         body.time_hint,
         t0,
         body.aggregate_text,
         "dev-synthetic",
     )
-    if not d:
+    if not result:
         return {"id": "failed", "url": "about:blank", "file_token": ""}
-    if d.get("ok") is False:
+    if result.get("ok") is False:
         return {
             "id": "failed",
-            "url": d.get("open_url", "about:blank") or "about:blank",
-            "file_token": d.get("file_token", "") or "",
+            "url": result.get("open_url", "about:blank") or "about:blank",
+            "file_token": result.get("file_token", "") or "",
         }
     return {
-        "id": d.get("file_token", "summary") or d.get("title", "summary")[:32],
-        "url": d.get("open_url", "about:blank") or "about:blank",
-        "file_token": d.get("file_token", "") or "",
+        "id": result.get("file_token", "summary") or result.get("title", "summary")[:32],
+        "url": result.get("open_url", "about:blank") or "about:blank",
+        "file_token": result.get("file_token", "") or "",
     }
+
+
+router = APIRouter()
+router.include_router(api_router)
+router.include_router(feishu_event_router)
+
+__all__ = ["api_router", "router"]
