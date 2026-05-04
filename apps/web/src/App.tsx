@@ -147,7 +147,7 @@ export function App() {
   return (
     <div>
       <h1>im-office-agent（应用内 H5 示意）</h1>
-      <p className="muted">Gateway + Mock Agents；`POST /api/v1/auth/dev` 已自动登录。生产环境改为飞书 OAuth。列表来自云空间 `ARTIFACTS` 配置目录，无本地业务库。</p>
+      <p className="muted">Gateway + 外部 Agents（`AGENTS_BASE_URL`）；`POST /api/v1/auth/dev` 已自动登录。生产环境改为飞书 OAuth。列表来自云空间 `ARTIFACTS` 配置目录，无本地业务库。</p>
       {err && <p className="error">{err}</p>}
 
       <section className="session-bar">

@@ -4,12 +4,14 @@ info:
   version: 1.0.0
   description: |
     单一端点、信封 + action 扩展。Gateway 与所有外部 Agents 经此协议通信。
+    若企业部署多个 Agents 服务实例，由 Gateway 侧注册表（如 AGENTS_REGISTRY_PATH 指向的 YAML）
+    按 action 选择目标基址；各实例对外仍暴露本规范同一 POST /v1/invoke 与请求体结构。
 
 servers:
   - url: "{baseUrl}"
     variables:
       baseUrl:
-        default: http://127.0.0.1:18080
+        default: https://agents.example.com
 
 paths:
   /v1/invoke:
@@ -168,7 +170,7 @@ components:
           type: string
         doc_open_url:
           type: string
-      description: Mock 可省略 doc_open_url，由 Gateway 用 CLI 写入后填充
+      description: 实现可省略 doc_open_url，由 Gateway 落盘后填充打开链接
 
     TimeWindow:
       type: object

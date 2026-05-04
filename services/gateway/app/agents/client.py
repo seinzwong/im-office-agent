@@ -7,13 +7,11 @@ from typing import Any, Optional
 import httpx
 
 from ..config import get_settings
+from .registry import resolve_agent_endpoint
 
 
 class AgentsClient:
     def __init__(self) -> None:
-        s = get_settings()
-        self._url = s.agents_base_url.rstrip("/") + "/v1/invoke"
-        self._token = s.agents_m2m_token
         self._client = httpx.Client(timeout=120.0)
 
     def invoke(
@@ -33,10 +31,13 @@ class AgentsClient:
         }
         if context:
             body["context"] = context
+        s = get_settings()
+        base, token = resolve_agent_endpoint(action, s)
+        url = base + "/v1/invoke"
         r = self._client.post(
-            self._url,
+            url,
             json=body,
-            headers={"Authorization": f"Bearer {self._token}"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         r.raise_for_status()
         return r.json()

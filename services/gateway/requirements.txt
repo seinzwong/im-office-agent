@@ -5,3 +5,4 @@ httpx>=0.28.0
 python-multipart>=0.0.16
 httpx[http2]
 itsdangerous>=2.2.0
+PyYAML>=6.0.0

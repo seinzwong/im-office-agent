@@ -2,8 +2,12 @@
 
 实现方：外部 Agents 服务（本仓库仅 `services/gateway` 的 **客户端** 与本规范 OpenAPI 对齐）。
 
-- **端点**：`POST {AGENTS_BASE_URL}/v1/invoke`
-- **鉴权**：`Authorization: Bearer <AGENTS_M2M_TOKEN>`
+- **端点**：`POST {base_url}/v1/invoke`（单实例时 `base_url` 即 `AGENTS_BASE_URL`；多实例时由 Gateway 注册表按 `action` 解析目标 `base_url`）
+- **鉴权**：`Authorization: Bearer <M2M_TOKEN>`（可与实例绑定；注册表见 [integrations/gateway-agents.md](integrations/gateway-agents.md)）
+
+## Gateway 多实例路由
+
+部署多个符合本协议的 Agents 时，**协议体不变**：每个实例仍提供 `POST /v1/invoke`。Gateway 通过配置文件将 `summary_from_chat`、`deliver_whiteboard`、`deliver_slides` 分别路由到不同 `base_url`（及可选的 per-agent token），详见 [`services/gateway/config/agents.example.yaml`](../services/gateway/config/agents.example.yaml) 与 [gateway-agents.md](integrations/gateway-agents.md)。
 
 ## 请求信封
 

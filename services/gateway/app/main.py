@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from .agents.registry import init_registry_from_settings
 from .config import get_settings
 from .routes import api_v1, lark_events
 
@@ -15,6 +16,7 @@ log = logging.getLogger("gateway")
 
 def create_app() -> FastAPI:
     s = get_settings()
+    init_registry_from_settings(s)
     app = FastAPI(
         title="im-office-agent Gateway",
         version="0.1.0",

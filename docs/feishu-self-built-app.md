@@ -31,4 +31,4 @@
 
 - 详细 HTTP 与 OAuth：[integrations/gateway-lark.md](integrations/gateway-lark.md)  
 - 前端 BFF：[integrations/gateway-bff.md](integrations/gateway-bff.md)  
-- Mock 联调：[demo-script.md](demo-script.md)
+- 本地演示与联调：[demo-script.md](demo-script.md)
