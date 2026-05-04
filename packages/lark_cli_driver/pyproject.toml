@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lark-cli-driver"
+version = "0.1.0"
+description = "Lark lark-cli subprocess driver for im-office-agent Gateway"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["lark_cli_driver"]
