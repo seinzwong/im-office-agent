@@ -6,9 +6,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from .agents.registry import init_registry_from_settings
+from services.agent.agents import init_registry_from_settings
+
 from .config import get_settings
-from .routes import api_v1, lark_events
+from .router import router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gateway")
@@ -34,9 +35,10 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(api_v1.router)
-    app.include_router(lark_events.router)
+    app.include_router(router)
     return app
 
 
 app = create_app()
+
+__all__ = ["app", "create_app"]
