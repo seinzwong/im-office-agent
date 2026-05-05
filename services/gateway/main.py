@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services.agent.agents import init_registry_from_settings
+
 from .config import get_settings
 from .router import router
 
@@ -15,12 +17,7 @@ log = logging.getLogger("gateway")
 
 def create_app() -> FastAPI:
     s = get_settings()
-    try:
-        from services.agent.agents import init_registry_from_settings
-
-        init_registry_from_settings(s)
-    except ImportError as exc:
-        log.warning("Agent registry initialization skipped: %s", exc)
+    init_registry_from_settings(s)
     app = FastAPI(
         title="im-office-agent Gateway",
         version="0.1.0",

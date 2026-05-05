@@ -17,6 +17,8 @@ class RuleTopicBackend:
         "哈哈哈",
         "哈哈",
         "roger",
+        "鏀跺埌",
+        "濂界殑",
     }
 
     ISSUE_TERMS = {
@@ -352,7 +354,7 @@ class RuleTopicBackend:
         if any(term in text for term in self.ACTION_TERMS):
             return True
         plain = (message.content.plain_text or "").strip()
-        if len(plain) <= 10 and any(term in text for term in ("处理", "回滚", "排查", "同步", "跟进", "修复")):
+        if len(plain) <= 10 and any(term in text for term in ("处理", "回滚", "排查", "同步", "跟进", "修复", "澶勭悊", "鍥炴粴")):
             return True
         return False
 

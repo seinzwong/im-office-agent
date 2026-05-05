@@ -1,4 +1,0 @@
-fastapi>=0.115.0
-httpx>=0.28.0
-langgraph>=0.2.60
-uvicorn[standard]>=0.32.0

@@ -96,14 +96,14 @@ def parse_feishu_event(raw_event: dict, task_id: str | None = None) -> Normalize
         elif message_type == "post":
             normalized_text = _extract_post_text(content_obj)
         elif message_type == "image":
-            normalized_text = "[图片]"
+            normalized_text = "[鍥剧墖]"
             has_image = True
         else:
             normalized_text = json.dumps(content_obj, ensure_ascii=False)
     except Exception:
         parse_status = "error"
         if message_type == "image":
-            normalized_text = "[图片]"
+            normalized_text = "[鍥剧墖]"
             has_image = True
         elif isinstance(raw_content, str):
             normalized_text = raw_content
