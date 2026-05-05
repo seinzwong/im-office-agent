@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -113,3 +115,37 @@ def process_feishu_event(raw_event: dict) -> dict:
 @app.post("/events/feishu/batch")
 def process_feishu_event_batch(req: FeishuBatchRequest) -> dict:
     return orchestrator.process_feishu_events_batch(req.events)
+
+
+@app.get("/debug/config")
+def debug_config() -> dict:
+    cfg = asdict(orchestrator.config)
+    return {
+        "store_backend": cfg.get("store_backend"),
+        "summary_client_mode": cfg.get("summary_client_mode"),
+        "importance_backend": cfg.get("importance_backend"),
+        "topic_backend": cfg.get("topic_backend"),
+        "summary_importance_threshold": cfg.get("summary_importance_threshold"),
+        "importance_hybrid_bert_weight": cfg.get("importance_hybrid_bert_weight"),
+        "topic_embedding_assign_threshold": cfg.get("topic_embedding_assign_threshold"),
+        "topic_embedding_uncertain_threshold": cfg.get("topic_embedding_uncertain_threshold"),
+        "model_paths": {
+            "importance_bert_model_path": cfg.get("importance_bert_model_path"),
+            "importance_bert_base_model": cfg.get("importance_bert_base_model"),
+            "topic_embedding_model_path": cfg.get("topic_embedding_model_path"),
+            "topic_embedding_base_model": cfg.get("topic_embedding_base_model"),
+        },
+        "runtime": {
+            "importance_bert_device": cfg.get("importance_bert_device"),
+            "topic_embedding_device": cfg.get("topic_embedding_device"),
+            "teammate_summary_base_url": cfg.get("teammate_summary_base_url"),
+            "teammate_summary_timeout_seconds": cfg.get("teammate_summary_timeout_seconds"),
+            "teammate_summary_api_key_configured": bool(cfg.get("teammate_summary_api_key")),
+        },
+        "redis": {
+            "redis_url": cfg.get("redis_url"),
+            "redis_key_prefix": cfg.get("redis_key_prefix"),
+            "redis_buffer_ttl_seconds": cfg.get("redis_buffer_ttl_seconds"),
+            "redis_max_buffer_messages": cfg.get("redis_max_buffer_messages"),
+        },
+    }

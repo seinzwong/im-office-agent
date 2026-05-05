@@ -1,0 +1,68 @@
+﻿{
+  "events": [
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt_demo_batch_001",
+        "event_type": "im.message.receive_v1",
+        "create_time": "1714915200000",
+        "token": "demo",
+        "app_id": "cli_demo"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {
+            "union_id": "on_demo_001",
+            "user_id": "u_demo_001",
+            "open_id": "ou_demo_001"
+          },
+          "sender_type": "user",
+          "tenant_key": "tenant_demo"
+        },
+        "message": {
+          "message_id": "om_demo_batch_001",
+          "root_id": "",
+          "parent_id": "",
+          "create_time": "1714915200000",
+          "chat_id": "oc_demo_chat_001",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\"text\":\"线上登录接口 500 了，用户无法登录\"}",
+          "mentions": []
+        }
+      }
+    },
+    {
+      "schema": "2.0",
+      "header": {
+        "event_id": "evt_demo_batch_002",
+        "event_type": "im.message.receive_v1",
+        "create_time": "1714915260000",
+        "token": "demo",
+        "app_id": "cli_demo"
+      },
+      "event": {
+        "sender": {
+          "sender_id": {
+            "union_id": "on_demo_002",
+            "user_id": "u_demo_002",
+            "open_id": "ou_demo_002"
+          },
+          "sender_type": "user",
+          "tenant_key": "tenant_demo"
+        },
+        "message": {
+          "message_id": "om_demo_batch_002",
+          "root_id": "",
+          "parent_id": "",
+          "create_time": "1714915260000",
+          "chat_id": "oc_demo_chat_001",
+          "chat_type": "group",
+          "message_type": "text",
+          "content": "{\"text\":\"我来处理，先回滚上一版\"}",
+          "mentions": []
+        }
+      }
+    }
+  ]
+}
