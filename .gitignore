@@ -10,6 +10,8 @@ services/gateway/gateway.yaml
 apps/web/config.yaml
 node_modules/
 dist/
+logs/
+apps/web/.npm-cache/
 *.db
 .coverage
 htmlcov/

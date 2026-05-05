@@ -106,6 +106,10 @@ export function App() {
     setListLoading(true);
     try {
       const m = await api.fetchMe();
+      if (!m.authenticated) {
+        api.startOAuthLogin();
+        return;
+      }
       setMe(m.user_open_id);
       const a = await api.fetchArtifacts();
       setItems(a.artifacts);
@@ -115,10 +119,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    api
-      .postDevLogin()
-      .then(load)
-      .catch((e) => setErr(String(e)));
+    load().catch((e) => setErr(String(e)));
   }, [load]);
 
   function toggle(fileToken: string) {

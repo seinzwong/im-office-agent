@@ -8,10 +8,14 @@ export async function postDevLogin(): Promise<void> {
   if (!r.ok) throw new Error(`auth: ${r.status}`);
 }
 
-export async function fetchMe(): Promise<{ user_open_id: string }> {
+export async function fetchMe(): Promise<{ user_open_id: string; authenticated: boolean }> {
   const r = await fetch(`${sameOrigin}/api/v1/me`, { credentials: "include" });
   if (!r.ok) throw new Error(`me: ${r.status}`);
-  return r.json() as Promise<{ user_open_id: string }>;
+  return r.json() as Promise<{ user_open_id: string; authenticated: boolean }>;
+}
+
+export function startOAuthLogin(): void {
+  window.location.assign(`${sameOrigin}/api/v1/auth/login`);
 }
 
 export type ArtifactsResponse = {

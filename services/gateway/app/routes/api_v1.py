@@ -14,6 +14,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..config import Settings, get_settings
@@ -51,7 +52,7 @@ def auth_login(s: Settings = Depends(get_settings)) -> Response:
         "state": "x",
     }
     u = s.lark_base_url + "/open-apis/authen/v1/authorize?" + urllib.parse.urlencode(
-        {**params, "response_type": "code", "scope": "openid contact:user.base:readonly"}
+        {**params, "response_type": "code", "scope": "contact:user.base:readonly"}
     )
     return Response(status_code=302, headers={"Location": u})
 
@@ -61,7 +62,7 @@ def auth_callback(
     request: Request,
     code: str = "",
     s: Settings = Depends(get_settings),
-) -> dict[str, str]:
+) -> RedirectResponse:
     if s.lark_app_id and code:
         # 使用官方接口换 user_access_token（SaaS 侧可能不同，MVP 占位）
         try:
@@ -84,7 +85,7 @@ def auth_callback(
         except Exception as e:  # noqa: BLE001
             log.warning("OAuth exchange: %s", e)
             request.session["user_open_id"] = "dev-oauth-fallback"
-    return {"ok": "true"}
+    return RedirectResponse(s.public_web_base_url or "/")
 
 
 @router.get("/artifacts")
