@@ -80,6 +80,7 @@ class DeliverableAnnotation(BaseModel):
     status: AnnotationStatus = AnnotationStatus.PENDING
     has_deliverable: bool | None = None
     items: list[DeliverableItem] = Field(default_factory=list)
+    matched_signals: list[str] = Field(default_factory=list)
     reason: str | None = None
 
 

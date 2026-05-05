@@ -6,6 +6,7 @@ from threading import Lock
 from .components.deliverables import DeliverableExtractor
 from .components.importance import SummaryCandidateSelector
 from .components.topic_tracker import TopicTracker
+from .config import MessageStructuringConfig, load_config_from_env
 from .preprocessor import parse_feishu_event
 from .schemas import (
     AnnotationStatus,
@@ -16,28 +17,60 @@ from .schemas import (
     TaskBrief,
     TaskSession,
 )
+from .summary_clients.stub import StubSummaryClient
+from .summary_clients.teammate_http import TeammateHTTPSummaryClient
 from .summary_updater import IncrementalSummaryUpdater
 from .task_manager import InMemoryTaskManager
 from .timeline_store import InMemoryTimelineStore
 
 
 class MessageStructuringOrchestrator:
-    def __init__(self) -> None:
+    def __init__(self, config: MessageStructuringConfig | None = None) -> None:
+        self.config = config or load_config_from_env()
         self.task_manager = InMemoryTaskManager()
         self.timeline_store = InMemoryTimelineStore()
         self.importance_component = SummaryCandidateSelector()
         self.deliverable_component = DeliverableExtractor(llm_client=None)
         self.topic_tracker = TopicTracker()
-        self.summary_updater = IncrementalSummaryUpdater()
+        self.summary_updater = IncrementalSummaryUpdater(
+            summary_client=self._build_summary_client(),
+            importance_threshold=self.config.summary_importance_threshold,
+        )
         self._summary_items: dict[str, list[SummaryItem]] = {}
         self._summary_item_ids: dict[str, set[str]] = {}
         self._lock = Lock()
+
+    def _build_summary_client(self):
+        if self.config.summary_client_mode == "http":
+            return TeammateHTTPSummaryClient(
+                base_url=self.config.teammate_summary_base_url,
+                api_key=self.config.teammate_summary_api_key,
+                timeout_seconds=self.config.teammate_summary_timeout_seconds,
+            )
+        return StubSummaryClient()
 
     def start_task(self, chat_id: str, activation_source: str = "manual_api", task_title: str | None = None) -> TaskSession:
         return self.task_manager.start_task(chat_id, activation_source=activation_source, task_title=task_title)
 
     def stop_task(self, task_id: str, reason: str = "manual") -> TaskSession | None:
         return self.task_manager.stop_task(task_id, reason=reason)
+
+    def get_task(self, task_id: str) -> TaskSession | None:
+        return self.task_manager.get_task(task_id)
+
+    def set_activation_state(self, chat_id: str, active: bool, task_title: str | None = None) -> dict:
+        if active:
+            existing = self.task_manager.get_active_task(chat_id)
+            if existing is not None:
+                return {"status": "already_active", "task": existing.model_dump(mode="json")}
+            task = self.start_task(chat_id=chat_id, activation_source="activation_state", task_title=task_title)
+            return {"status": "activated", "task": task.model_dump(mode="json")}
+
+        existing = self.task_manager.get_active_task(chat_id)
+        if existing is None:
+            return {"status": "already_inactive", "chat_id": chat_id}
+        stopped = self.stop_task(existing.task_id, reason="activation_off")
+        return {"status": "deactivated", "task": stopped.model_dump(mode="json") if stopped else None}
 
     def process_feishu_event(self, raw_event: dict) -> dict:
         chat_id = ((raw_event.get("event") or {}).get("message") or {}).get("chat_id")
@@ -89,28 +122,7 @@ class MessageStructuringOrchestrator:
                     self.timeline_store.update_annotation(task.task_id, message.message_id, component_name, annotation)
 
         stored_message = self.timeline_store.get_message(task.task_id, message.message_id) or message
-
-        statuses = [
-            stored_message.annotations.importance.status,
-            stored_message.annotations.deliverables.status,
-            stored_message.annotations.topic.status,
-        ]
-        completed_statuses = {AnnotationStatus.DONE, AnnotationStatus.SKIPPED}
-        if all(status in completed_statuses for status in statuses):
-            topics = self.topic_tracker.get_topics(task.task_id)
-            summary_item = self.summary_updater.maybe_update(stored_message, topics)
-            if summary_item:
-                with self._lock:
-                    item_ids = self._summary_item_ids.setdefault(task.task_id, set())
-                    items = self._summary_items.setdefault(task.task_id, [])
-                    if summary_item.summary_item_id not in item_ids:
-                        item_ids.add(summary_item.summary_item_id)
-                        items.append(summary_item)
-            self.timeline_store.update_annotation(task.task_id, stored_message.message_id, "summary", stored_message.annotations.summary)
-        else:
-            stored_message.annotations.summary.status = AnnotationStatus.SKIPPED
-            stored_message.annotations.summary.reason = "skipped due to upstream component failure"
-            self.timeline_store.update_annotation(task.task_id, stored_message.message_id, "summary", stored_message.annotations.summary)
+        self._apply_summary_for_message(task.task_id, stored_message)
 
         return {
             "status": "processed",
@@ -118,6 +130,73 @@ class MessageStructuringOrchestrator:
             "message": (self.timeline_store.get_message(task.task_id, message.message_id) or stored_message).model_dump(mode="json"),
             "topic_updated": topic_node is not None,
         }
+
+    def process_feishu_events_batch(self, events: list[dict]) -> dict:
+        results = [self.process_feishu_event(event) for event in events]
+        return {"count": len(events), "results": results}
+
+    def _apply_summary_for_message(self, task_id: str, message) -> None:
+        statuses = [
+            message.annotations.importance.status,
+            message.annotations.deliverables.status,
+            message.annotations.topic.status,
+        ]
+        completed_statuses = {AnnotationStatus.DONE, AnnotationStatus.SKIPPED}
+        if all(status in completed_statuses for status in statuses):
+            topics = self.topic_tracker.get_topics(task_id)
+            summary_item = self.summary_updater.maybe_update(message, topics)
+            if summary_item:
+                with self._lock:
+                    item_ids = self._summary_item_ids.setdefault(task_id, set())
+                    items = self._summary_items.setdefault(task_id, [])
+                    if summary_item.summary_item_id not in item_ids:
+                        item_ids.add(summary_item.summary_item_id)
+                        items.append(summary_item)
+            self.timeline_store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
+        else:
+            message.annotations.summary.status = AnnotationStatus.SKIPPED
+            message.annotations.summary.reason = "skipped due to upstream component failure"
+            self.timeline_store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
+
+    def reprocess_summary(self, task_id: str) -> dict:
+        task = self.task_manager.get_task(task_id)
+        if task is None:
+            return {"status": "not_found", "task_id": task_id}
+
+        with self._lock:
+            self._summary_items[task_id] = []
+            self._summary_item_ids[task_id] = set()
+        self.summary_updater.reset_seen()
+
+        for message in self.timeline_store.get_messages(task_id):
+            message.annotations.summary.status = AnnotationStatus.NOT_SELECTED
+            message.annotations.summary.summary_item_ids = []
+            message.annotations.summary.reason = "reprocessing"
+            self._apply_summary_for_message(task_id, message)
+
+        return {
+            "status": "ok",
+            "task_id": task_id,
+            "summary_count": len(self._summary_items.get(task_id, [])),
+        }
+
+    def get_messages(self, task_id: str) -> list[dict] | dict:
+        task = self.task_manager.get_task(task_id)
+        if task is None:
+            return {"status": "not_found", "task_id": task_id}
+        return [m.model_dump(mode="json") for m in self.timeline_store.get_messages(task_id)]
+
+    def get_topics(self, task_id: str) -> list[dict] | dict:
+        task = self.task_manager.get_task(task_id)
+        if task is None:
+            return {"status": "not_found", "task_id": task_id}
+        return [t.model_dump(mode="json") for t in self.topic_tracker.get_topics(task_id)]
+
+    def get_summary(self, task_id: str) -> dict:
+        task = self.task_manager.get_task(task_id)
+        if task is None:
+            return {"status": "not_found", "task_id": task_id}
+        return {"items": [item.model_dump(mode="json") for item in self._summary_items.get(task_id, [])]}
 
     def get_result(self, task_id: str) -> dict:
         task = self.task_manager.get_task(task_id)
@@ -130,7 +209,7 @@ class MessageStructuringOrchestrator:
 
         errors: list[str] = []
         for msg in messages:
-            for name in ("importance", "deliverables", "topic"):
+            for name in ("importance", "deliverables", "topic", "summary"):
                 ann = getattr(msg.annotations, name)
                 if ann.status == AnnotationStatus.ERROR:
                     errors.append(f"{msg.message_id}:{name}:{ann.reason}")
@@ -139,12 +218,7 @@ class MessageStructuringOrchestrator:
         brief = TaskBrief(
             summary=" ".join([item.text for item in summary_items[:3]]).strip(),
             goal=task.task_title or "",
-            deliverables=[
-                item.value
-                for msg in messages
-                for item in msg.annotations.deliverables.items
-                if item.label in {"artifact", "task"}
-            ][:10],
+            deliverables=[],
             confidence=round(
                 (sum(item.confidence for item in summary_items) / len(summary_items)) if summary_items else 0.0,
                 4,
