@@ -31,7 +31,7 @@ class MessageStructuringOrchestrator:
         self.event_buffer = self._build_event_buffer()
         self.importance_component = SummaryCandidateSelector(config=self.config)
         self.deliverable_component = DeliverableExtractor(llm_client=None)
-        self.topic_tracker = TopicTracker()
+        self.topic_tracker = TopicTracker(config=self.config)
         self.summary_updater = IncrementalSummaryUpdater(
             summary_client=self._build_summary_client(),
             importance_threshold=self.config.summary_importance_threshold,

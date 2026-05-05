@@ -7,3 +7,4 @@ __pycache__/
 models/importance_base/
 models/importance_bert/
 models/topic_embedding/
+models/missing_topic_embedding/

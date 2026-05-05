@@ -22,6 +22,13 @@ class MessageStructuringConfig:
     importance_bert_device: str = "auto"
     importance_hybrid_bert_weight: float = 0.6
     importance_max_length: int = 128
+    topic_backend: str = "rule"
+    topic_embedding_model_path: str = "models/topic_embedding"
+    topic_embedding_base_model: str = "BAAI/bge-small-zh-v1.5"
+    topic_embedding_device: str = "auto"
+    topic_embedding_assign_threshold: float = 0.68
+    topic_embedding_uncertain_threshold: float = 0.58
+    topic_embedding_max_length: int = 128
 
 
 def load_config_from_env() -> MessageStructuringConfig:
@@ -44,6 +51,15 @@ def load_config_from_env() -> MessageStructuringConfig:
     importance_device = os.getenv("IMPORTANCE_BERT_DEVICE", "auto").strip().lower()
     if importance_device not in {"auto", "cpu", "cuda"}:
         importance_device = "auto"
+    topic_backend = os.getenv("TOPIC_BACKEND", "rule").strip().lower()
+    if topic_backend not in {"rule", "embedding", "hybrid"}:
+        topic_backend = "rule"
+    topic_embedding_device = os.getenv("TOPIC_EMBEDDING_DEVICE", "auto").strip().lower()
+    if topic_embedding_device not in {"auto", "cpu", "cuda"}:
+        topic_embedding_device = "auto"
+    topic_assign_threshold_raw = os.getenv("TOPIC_EMBEDDING_ASSIGN_THRESHOLD", "0.68")
+    topic_uncertain_threshold_raw = os.getenv("TOPIC_EMBEDDING_UNCERTAIN_THRESHOLD", "0.58")
+    topic_max_length_raw = os.getenv("TOPIC_EMBEDDING_MAX_LENGTH", "128")
     try:
         timeout_value = float(timeout_raw)
     except ValueError:
@@ -68,10 +84,25 @@ def load_config_from_env() -> MessageStructuringConfig:
         importance_max_length = int(importance_max_length_raw)
     except ValueError:
         importance_max_length = 128
+    try:
+        topic_assign_threshold = float(topic_assign_threshold_raw)
+    except ValueError:
+        topic_assign_threshold = 0.68
+    try:
+        topic_uncertain_threshold = float(topic_uncertain_threshold_raw)
+    except ValueError:
+        topic_uncertain_threshold = 0.58
+    try:
+        topic_max_length = int(topic_max_length_raw)
+    except ValueError:
+        topic_max_length = 128
 
     threshold_value = max(0.0, min(threshold_value, 1.0))
     importance_hybrid_weight = max(0.0, min(importance_hybrid_weight, 1.0))
     importance_max_length = max(8, importance_max_length)
+    topic_assign_threshold = max(0.0, min(topic_assign_threshold, 1.0))
+    topic_uncertain_threshold = max(0.0, min(topic_uncertain_threshold, 1.0))
+    topic_max_length = max(8, topic_max_length)
 
     return MessageStructuringConfig(
         summary_client_mode=mode,
@@ -90,4 +121,11 @@ def load_config_from_env() -> MessageStructuringConfig:
         importance_bert_device=importance_device,
         importance_hybrid_bert_weight=importance_hybrid_weight,
         importance_max_length=importance_max_length,
+        topic_backend=topic_backend,
+        topic_embedding_model_path=os.getenv("TOPIC_EMBEDDING_MODEL_PATH", "models/topic_embedding").strip(),
+        topic_embedding_base_model=os.getenv("TOPIC_EMBEDDING_BASE_MODEL", "BAAI/bge-small-zh-v1.5").strip(),
+        topic_embedding_device=topic_embedding_device,
+        topic_embedding_assign_threshold=topic_assign_threshold,
+        topic_embedding_uncertain_threshold=topic_uncertain_threshold,
+        topic_embedding_max_length=topic_max_length,
     )
