@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
 from .adapter.artifact_publisher import build_ir_preview, publish_agent_output, publish_ir
+from .adapter.e2e_dry_run import run_e2e_dry_run
 
 try:
     from .context_hygiene.context_packet_builder import run_deliver_artifacts
@@ -185,6 +186,11 @@ class IrPreviewIn(BaseModel):
     ir: dict[str, Any]
 
 
+class E2EDryRunIn(BaseModel):
+    raw_backend_packet: dict[str, Any]
+    options: dict[str, Any] = Field(default_factory=lambda: {"targets": ["doc", "board", "ppt"], "dry_run": True})
+
+
 @api_router.post("/dev/trigger-summary")
 def dev_trigger(body: DevTriggerIn) -> dict[str, str]:
     t0 = body.t0_unix or int(time.time())
@@ -223,6 +229,11 @@ def adapter_publish_agent_output(body: PublishAgentOutputIn) -> dict[str, Any]:
 @adapter_router.post("/ir-preview")
 def adapter_ir_preview(body: IrPreviewIn) -> dict[str, Any]:
     return build_ir_preview(body.ir)
+
+
+@adapter_router.post("/e2e-dry-run")
+def adapter_e2e_dry_run(body: E2EDryRunIn) -> dict[str, Any]:
+    return run_e2e_dry_run(body.raw_backend_packet, body.options)
 
 
 router = APIRouter()

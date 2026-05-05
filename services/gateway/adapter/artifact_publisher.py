@@ -19,6 +19,8 @@ def publish_ir(ir: dict, options: dict) -> dict:
 
     options = options or {}
     targets = options.get("targets") or ["doc"]
+    if isinstance(targets, str):
+        targets = [targets]
     if "all" in targets:
         targets = ["doc", "board", "ppt"]
     target_results: dict[str, dict] = {}
@@ -36,7 +38,16 @@ def publish_ir(ir: dict, options: dict) -> dict:
             target_results[str(target)] = _error("INVALID_PUBLISH_MODE", f"Unsupported target: {target}", [target], [])
     for result in target_results.values():
         warnings.extend(result.get("warnings") or [])
-    return {"ok": all(result.get("ok") is True for result in target_results.values()), "ir_validation": validation, "targets": target_results, "warnings": _dedupe(warnings)}
+    return {
+        "ok": all(result.get("ok") is True for result in target_results.values()),
+        "ir_validation": validation,
+        "markdown_preview": ir_to_markdown(normalized),
+        "doc_blocks_preview": ir_to_feishu_doc_blocks(normalized),
+        "board_draft": ir_to_feishu_board_draft(normalized),
+        "ppt_draft": ir_to_ppt_draft(normalized),
+        "targets": target_results,
+        "warnings": _dedupe(warnings),
+    }
 
 
 def publish_agent_output(agent_output: dict, options: dict, current_ir: dict | None = None) -> dict:

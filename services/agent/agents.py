@@ -323,6 +323,7 @@ def call_llm_json(
     schema_hint: str | None = None,
     model: str | None = None,
     max_tokens: int | None = None,
+    allow_mock_fallback: bool = True,
 ) -> tuple[dict, ModelMode, JsonDict]:
     """Call an OpenAI-compatible chat completions endpoint and parse JSON.
 
@@ -341,11 +342,15 @@ def call_llm_json(
         "llm_elapsed_ms": 0.0,
     }
     if settings.mock_mode:
+        if not allow_mock_fallback:
+            raise RuntimeError("AGENT_LLM_MOCK_MODE is enabled, but this call requires a real model response.")
         result = _mock_llm_json(prompt, payload)
         metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
         metrics["llm_fallback_reason"] = "AGENT_LLM_MOCK_MODE is enabled"
         return result, "mock", metrics
     if settings.api_key in PLACEHOLDER_KEYS:
+        if not allow_mock_fallback:
+            raise RuntimeError("AGENT_LLM_API_KEY is empty or placeholder; real model response required.")
         result = _mock_llm_json(prompt, payload)
         metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
         metrics["llm_fallback_reason"] = "AGENT_LLM_API_KEY is empty or placeholder"
@@ -394,6 +399,10 @@ def call_llm_json(
         metrics["llm_fallback_reason"] = "Model response was not valid JSON"
     except Exception as exc:
         metrics["llm_fallback_reason"] = f"{type(exc).__name__}: {exc}"
+        if not allow_mock_fallback:
+            raise RuntimeError(metrics["llm_fallback_reason"]) from exc
+    if not allow_mock_fallback:
+        raise RuntimeError(metrics.get("llm_fallback_reason") or "Model response was not valid JSON")
     result = _mock_llm_json(prompt, payload)
     metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
     return result, "mock", metrics
@@ -661,7 +670,7 @@ def _mock_topic_summary(payload: JsonDict) -> JsonDict:
     topic_type = str(topic.get("type") or "observation")
     text_parts = [_message_text(message) for message in messages]
     text_parts = [text for text in text_parts if text]
-    new_info = "；".join(text_parts)
+    new_info = _compact_summary(text_parts, max_chars=220)
     uncertain = any(_contains_uncertainty(text) for text in text_parts)
 
     if not new_info:
@@ -669,11 +678,11 @@ def _mock_topic_summary(payload: JsonDict) -> JsonDict:
         reason = "新增消息没有提供可用于更新摘要的信息。"
     elif old_summary:
         prefix = "新增消息不确定地补充：" if uncertain else "新增消息补充："
-        new_summary = _join_sentences(old_summary, prefix + new_info)
+        new_summary = _compact_summary([old_summary, prefix + new_info], max_chars=320)
         reason = "基于新增消息增量补充 topic 摘要。"
     else:
         prefix = "可能：" if uncertain else ""
-        new_summary = prefix + new_info
+        new_summary = _compact_summary([prefix + new_info], max_chars=260)
         reason = "基于新增消息形成初始 topic 摘要。"
 
     evidence = []
@@ -742,14 +751,21 @@ def _mock_task_summary(payload: JsonDict) -> JsonDict:
         confidence = 0.62 if topic_summaries else 0.45
 
     summary_parts = [text for text in (problem, cause, delivery) if text]
+    if not summary_parts:
+        summary_parts = [
+            str(topic.get("summary") or "").strip()
+            for topic in topic_summaries
+            if str(topic.get("summary") or "").strip()
+        ][:3]
     if summary_parts:
-        new_summary = "团队正在讨论" + "；".join(summary_parts)
+        new_summary = _compact_summary(["团队正在讨论" + "；".join(summary_parts)], max_chars=420)
     else:
         new_summary = old_task.get("summary") or ""
     if has_delivery and deadline:
-        new_summary = _join_sentences(
-            new_summary, f"需要在{deadline}形成相关交付材料。"
-        )
+        deadline_sentence = f"需要在{deadline}形成相关交付材料"
+        if deadline_sentence not in new_summary:
+            new_summary = _join_sentences(new_summary, deadline_sentence)
+        new_summary = _compact_summary([new_summary], max_chars=420)
 
     return {
         "new_title": title,
@@ -1071,6 +1087,20 @@ def _loads_json_object(raw: str) -> JsonDict | None:
         return None
 
 
+def _compact_summary(parts: list[Any], max_chars: int = 320) -> str:
+    cleaned = []
+    for part in parts:
+        text = re.sub(r"\s+", " ", str(part or "")).strip(" ；;。")
+        if text:
+            cleaned.append(text)
+    if not cleaned:
+        return ""
+    summary = "；".join(cleaned)
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max(0, max_chars - 1)].rstrip(" ；;。") + "。"
+
+
 def _repair_json_text(raw: str) -> JsonDict | None:
     text = raw.strip()
     if text.startswith("```"):
@@ -1099,7 +1129,16 @@ def _required_str(value: JsonDict, key: str) -> str:
 
 
 def _message_text(message: JsonDict) -> str:
-    return str(message.get("text") or message.get("content") or "").strip()
+    content = message.get("content")
+    if isinstance(content, dict):
+        return str(
+            message.get("text")
+            or content.get("normalized_text")
+            or content.get("plain_text")
+            or content.get("raw_content")
+            or ""
+        ).strip()
+    return str(message.get("text") or content or "").strip()
 
 
 def _contains_uncertainty(text: str) -> bool:
@@ -1256,8 +1295,7 @@ def _persist_output(kind: str, result: JsonDict) -> tuple[Any, float]:
     settings = get_agent_settings()
     output_dir = settings.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    path = output_dir / f"{timestamp}_{_safe_id(kind)}.json"
+    path = output_dir / f"{_safe_id(kind)}.json"
     started_at = time.perf_counter()
     path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2),

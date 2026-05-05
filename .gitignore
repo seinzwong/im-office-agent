@@ -14,7 +14,7 @@ dist/
 .coverage
 htmlcov/
 .vscode/
-
+tests/
 .cursor/
 .codex/
 models/

@@ -147,6 +147,7 @@ class TopicMessageRef(BaseModel):
 class TopicNode(BaseModel):
     topic_id: str
     topic_title: str
+    summary: str = ""
     message_count: int = 0
     update_count: int = 0
     refs: list[TopicMessageRef] = Field(default_factory=list)
@@ -166,6 +167,8 @@ class TaskBrief(BaseModel):
     summary: str = ""
     goal: str = ""
     deliverables: list[str] = Field(default_factory=list)
+    deadline: str | None = None
+    status: str = "collecting"
     confidence: float = 0.0
 
 

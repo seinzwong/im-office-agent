@@ -40,6 +40,17 @@ class RuleImportanceScorer:
             "嗯嗯",
         }
 
+        self.strong_signal_patterns["issue"].extend([r"问题", r"异常", r"报错", r"失败", r"卡住", r"卡点"])
+        self.strong_signal_patterns["action_item"].extend([r"待办", r"需要", r"请.*(完成|处理|跟进)", r"负责"])
+        self.strong_signal_patterns["decision"].extend([r"决定", r"结论", r"拍板", r"确认"])
+        self.strong_signal_patterns["deadline"].extend([r"截止", r"今天", r"明天", r"后天", r"本周", r"下周"])
+        self.strong_signal_patterns["risk"].extend([r"风险", r"阻塞", r"影响", r"延期"])
+        self.strong_signal_patterns["reference"].extend([r"文档", r"链接", r"参考", r"PRD", r"PPT"])
+        self.strong_signal_patterns["progress"].extend([r"完成", r"进展", r"上线", r"已解决"])
+        self.strong_signal_patterns["requirement"].extend([r"需求", r"必须", r"应当", r"约束"])
+        self.strong_signal_patterns["solution"].extend([r"方案", r"修复", r"优化", r"实现", r"流程"])
+        self.noise_terms.update({"收到", "好的", "嗯嗯", "哈哈"})
+
     def score(self, message: NormalizedMessage) -> ImportanceScoreResult:
         text = (message.content.normalized_text or "").strip()
         lowered = text.lower()

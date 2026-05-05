@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+from typing import Any
+
+import httpx
+
+from services.gateway.config import get_settings
 from services.gateway.message_structuring.schemas import AnnotationStatus, NormalizedMessage, SummaryItem, TopicNode
 from services.gateway.message_structuring.summary_clients.base import SummaryClient, SummaryClientRequest
 
@@ -81,3 +87,65 @@ class IncrementalSummaryUpdater:
 
     def reset_seen(self) -> None:
         self._message_seen.clear()
+
+    def update_topic_summary(self, task_id: str, topic: TopicNode, new_messages: list[NormalizedMessage]) -> dict:
+        payload = {
+            "update_type": "topic_summary",
+            "payload": {
+                "task_id": task_id,
+                "topic": topic.model_dump(mode="json"),
+                "new_messages": [message.model_dump(mode="json") for message in new_messages],
+            },
+            "options": {"language": "zh-CN"},
+        }
+        return _call_agent_structuring_summary(payload)
+
+    def update_task_summary(
+        self,
+        old_task: dict[str, Any],
+        topic_summaries: list[TopicNode],
+        trigger_messages: list[NormalizedMessage],
+        signals: dict[str, Any],
+    ) -> dict:
+        payload = {
+            "update_type": "task_summary",
+            "payload": {
+                "task": old_task,
+                "topic_summaries": [topic.model_dump(mode="json") for topic in topic_summaries],
+                "trigger_messages": [message.model_dump(mode="json") for message in trigger_messages],
+                "signals": signals,
+            },
+            "options": {"language": "zh-CN"},
+        }
+        return _call_agent_structuring_summary(payload)
+
+
+def _call_agent_structuring_summary(payload: dict[str, Any]) -> dict:
+    base_url = (
+        os.environ.get("AGENT_SUMMARY_BASE_URL")
+        or os.environ.get("AGENTS_BASE_URL")
+        or get_settings().agents_base_url
+        or "http://127.0.0.1:8001"
+    ).strip()
+    timeout_seconds = float(os.environ.get("AGENT_SUMMARY_TIMEOUT_SECONDS") or "120")
+    url = base_url.rstrip("/") + "/agent/update-structuring-summary"
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            response = client.post(url, json=payload, headers={"Content-Type": "application/json"})
+            response.raise_for_status()
+            parsed = response.json()
+    except Exception as exc:
+        return {
+            "error": {
+                "code": "AGENT_SUMMARY_HTTP_FAILED",
+                "message": str(exc),
+                "details": {"url": url},
+            }
+        }
+    return parsed if isinstance(parsed, dict) else {
+        "error": {
+            "code": "AGENT_SUMMARY_INVALID_RESPONSE",
+            "message": "Agent summary response must be a JSON object.",
+            "details": {"url": url, "response_type": type(parsed).__name__},
+        }
+    }

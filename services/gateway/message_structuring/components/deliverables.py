@@ -19,6 +19,12 @@ class DeliverableExtractor:
             "system_scope": ["api", "接口", "服务", "模块", "login", "token", "redis", "rag"],
         }
 
+        self.signal_patterns["deadline"].extend(["截止", "截止时间", "今天", "明天", "后天", "本周", "下周"])
+        self.signal_patterns["deliverable_doc"].extend(["方案", "文档", "总结", "汇报", "提案", "材料"])
+        self.signal_patterns["task_action"].extend(["需要", "请", "处理", "跟进", "待办", "负责"])
+        self.signal_patterns["meeting"].extend(["会议", "同步", "评审", "周会"])
+        self.signal_patterns["system_scope"].extend(["接口", "服务", "模块", "系统", "账号", "权限", "流程", "SOP", "CRM"])
+
     def process(self, message: NormalizedMessage) -> DeliverableAnnotation:
         text = (message.content.normalized_text or "").strip()
         lowered = text.lower()
