@@ -1,0 +1,35 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "evt_post_message_001",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1714542100000",
+    "token": "test-token",
+    "app_id": "cli_test_app",
+    "tenant_key": "tenant_test"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "union_id": "on_user_post_001",
+        "user_id": "u_post_001",
+        "open_id": "ou_post_001"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_test"
+    },
+    "message": {
+      "message_id": "om_post_message_001",
+      "root_id": "om_post_message_001",
+      "parent_id": "om_post_message_001",
+      "create_time": "1714542100001",
+      "update_time": "1714542100002",
+      "chat_id": "oc_fixture_chat_001",
+      "thread_id": "omt_fixture_thread_001",
+      "chat_type": "group",
+      "message_type": "post",
+      "content": "{\"title\":\"Weekly Project Sync\",\"content\":[[{\"tag\":\"text\",\"text\":\"Meeting moved to Friday 15:00.\"},{\"tag\":\"text\",\"text\":\"Please bring PRD and rollout plan.\"}]]}",
+      "mentions": []
+    }
+  }
+}

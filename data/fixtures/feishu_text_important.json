@@ -1,0 +1,47 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "evt_text_important_001",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1714542000000",
+    "token": "test-token",
+    "app_id": "cli_test_app",
+    "tenant_key": "tenant_test"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "union_id": "on_user_important_001",
+        "user_id": "u_important_001",
+        "open_id": "ou_important_001"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_test"
+    },
+    "message": {
+      "message_id": "om_text_important_001",
+      "root_id": "om_text_important_001",
+      "parent_id": "om_text_important_001",
+      "create_time": "1714542000001",
+      "update_time": "1714542000002",
+      "chat_id": "oc_fixture_chat_001",
+      "thread_id": "omt_fixture_thread_001",
+      "chat_type": "group",
+      "message_type": "text",
+      "content": "{\"text\":\"@_user_1 Decision: API rollout deadline is tomorrow 18:00. Please finish PRD and send update to dev-team@example.com.\"}",
+      "mentions": [
+        {
+          "key": "@_user_1",
+          "id": {
+            "union_id": "on_user_tom",
+            "user_id": "u_tom",
+            "open_id": "ou_tom"
+          },
+          "mentioned_type": "user",
+          "name": "Tom",
+          "tenant_key": "tenant_test"
+        }
+      ]
+    }
+  }
+}

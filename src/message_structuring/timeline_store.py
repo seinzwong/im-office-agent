@@ -18,10 +18,11 @@ class InMemoryTimelineStore:
         with self._lock:
             task_messages = self._messages_by_task.setdefault(task_id, {})
             dedup_set = self._dedup_index.setdefault(task_id, set())
-            if message.dedup.dedup_key in dedup_set:
+            is_duplicate = message.dedup.dedup_key in dedup_set or message.message_id in task_messages
+            if is_duplicate:
                 message.dedup.is_duplicate = True
-            if message.message_id in task_messages:
-                message.dedup.is_duplicate = True
+                return message
+
             task_messages[message.message_id] = message
             dedup_set.add(message.dedup.dedup_key)
             return message

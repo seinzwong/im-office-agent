@@ -1,0 +1,35 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "evt_image_message_001",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1714542200000",
+    "token": "test-token",
+    "app_id": "cli_test_app",
+    "tenant_key": "tenant_test"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "union_id": "on_user_image_001",
+        "user_id": "u_image_001",
+        "open_id": "ou_image_001"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_test"
+    },
+    "message": {
+      "message_id": "om_image_message_001",
+      "root_id": "om_image_message_001",
+      "parent_id": "om_image_message_001",
+      "create_time": "1714542200001",
+      "update_time": "1714542200002",
+      "chat_id": "oc_fixture_chat_001",
+      "thread_id": "omt_fixture_thread_001",
+      "chat_type": "group",
+      "message_type": "image",
+      "content": "{\"image_key\":\"img_v2_fixture_001\"}",
+      "mentions": []
+    }
+  }
+}

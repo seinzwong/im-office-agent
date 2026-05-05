@@ -1,0 +1,35 @@
+{
+  "schema": "2.0",
+  "header": {
+    "event_id": "evt_malformed_content_001",
+    "event_type": "im.message.receive_v1",
+    "create_time": "1714542300000",
+    "token": "test-token",
+    "app_id": "cli_test_app",
+    "tenant_key": "tenant_test"
+  },
+  "event": {
+    "sender": {
+      "sender_id": {
+        "union_id": "on_user_bad_001",
+        "user_id": "u_bad_001",
+        "open_id": "ou_bad_001"
+      },
+      "sender_type": "user",
+      "tenant_key": "tenant_test"
+    },
+    "message": {
+      "message_id": "om_malformed_content_001",
+      "root_id": "om_malformed_content_001",
+      "parent_id": "om_malformed_content_001",
+      "create_time": "1714542300001",
+      "update_time": "1714542300002",
+      "chat_id": "oc_fixture_chat_001",
+      "thread_id": "omt_fixture_thread_001",
+      "chat_type": "group",
+      "message_type": "text",
+      "content": "{\"text\":\"This payload is broken\"",
+      "mentions": []
+    }
+  }
+}
