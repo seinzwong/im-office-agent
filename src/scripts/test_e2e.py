@@ -26,7 +26,7 @@ def main() -> None:
     message = messages[0]
     assert message["annotations"]["importance"]["status"] == "done"
     assert message["annotations"]["deliverables"]["status"] == "done"
-    assert message["annotations"]["topic"]["status"] == "done"
+    assert message["annotations"]["topic"]["status"] in {"done", "skipped"}
 
     print("\nE2E assertions passed.")
 

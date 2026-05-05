@@ -95,7 +95,8 @@ class MessageStructuringOrchestrator:
             stored_message.annotations.deliverables.status,
             stored_message.annotations.topic.status,
         ]
-        if all(status == AnnotationStatus.DONE for status in statuses):
+        completed_statuses = {AnnotationStatus.DONE, AnnotationStatus.SKIPPED}
+        if all(status in completed_statuses for status in statuses):
             topics = self.topic_tracker.get_topics(task.task_id)
             summary_item = self.summary_updater.maybe_update(stored_message, topics)
             if summary_item:

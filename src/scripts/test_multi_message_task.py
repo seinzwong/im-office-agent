@@ -37,7 +37,7 @@ def main() -> None:
     for msg in messages:
         assert msg["annotations"]["importance"]["status"] == "done"
         assert msg["annotations"]["deliverables"]["status"] == "done"
-        assert msg["annotations"]["topic"]["status"] == "done"
+        assert msg["annotations"]["topic"]["status"] in {"done", "skipped"}
 
     noise_message = next(msg for msg in messages if msg["message_id"] == "om_multi_001")
     assert noise_message["annotations"]["summary"]["status"] in {"not_selected", "skipped"}
@@ -45,6 +45,7 @@ def main() -> None:
     summary_items = task_result["summary"]["items"]
     assert len(summary_items) >= 1, "high-value messages should trigger at least one summary item"
     assert all(item["source_message_ids"] for item in summary_items)
+    assert task_result["quality"]["topic_count"] <= 2, "related discussion should merge to 1-2 topics"
 
     print(json.dumps(task_result["quality"], ensure_ascii=False, indent=2))
     print("Multi-message task test passed.")
