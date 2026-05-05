@@ -17,8 +17,6 @@ class RuleTopicBackend:
         "哈哈哈",
         "哈哈",
         "roger",
-        "鏀跺埌",
-        "濂界殑",
     }
 
     ISSUE_TERMS = {
