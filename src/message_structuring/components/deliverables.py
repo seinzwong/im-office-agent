@@ -23,23 +23,25 @@ class DeliverableExtractor:
         text = (message.content.normalized_text or "").strip()
         lowered = text.lower()
 
-        matched_signals: list[str] = []
+        base_signals: list[str] = []
         if self.EMAIL_RE.search(text):
-            matched_signals.append("email")
+            base_signals.append("email")
         if self.DATE_TIME_RE.search(text):
-            matched_signals.append("time_expr")
-        if message.features.has_mention:
-            matched_signals.append("mention")
+            base_signals.append("time_expr")
         if message.features.has_url:
-            matched_signals.append("url")
+            base_signals.append("url")
         if message.features.has_file:
-            matched_signals.append("file")
+            base_signals.append("file")
 
         for signal, terms in self.signal_patterns.items():
             if any(term in lowered or term in text for term in terms):
-                matched_signals.append(signal)
+                base_signals.append(signal)
 
-        matched_signals = sorted(set(matched_signals))
+        matched_signals = sorted(set(base_signals))
+        if message.features.has_mention and matched_signals:
+            matched_signals.append("mention")
+            matched_signals = sorted(set(matched_signals))
+
         has_deliverable = len(matched_signals) > 0 and len(message.content.plain_text.strip()) > 0
         reason = "matched deliverable signals: " + ",".join(matched_signals) if has_deliverable else "no deliverable signal"
 
