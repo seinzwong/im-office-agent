@@ -16,6 +16,12 @@ class MessageStructuringConfig:
     redis_key_prefix: str = "msl"
     redis_buffer_ttl_seconds: int = 300
     redis_max_buffer_messages: int = 1000
+    importance_backend: str = "rule"
+    importance_bert_model_path: str = "models/importance_bert"
+    importance_bert_base_model: str = "hfl/chinese-macbert-base"
+    importance_bert_device: str = "auto"
+    importance_hybrid_bert_weight: float = 0.6
+    importance_max_length: int = 128
 
 
 def load_config_from_env() -> MessageStructuringConfig:
@@ -30,6 +36,14 @@ def load_config_from_env() -> MessageStructuringConfig:
         store_backend = "memory"
     redis_buffer_ttl_raw = os.getenv("REDIS_BUFFER_TTL_SECONDS", "300")
     redis_max_buffer_raw = os.getenv("REDIS_MAX_BUFFER_MESSAGES", "1000")
+    importance_backend = os.getenv("IMPORTANCE_BACKEND", "rule").strip().lower()
+    if importance_backend not in {"rule", "bert", "hybrid"}:
+        importance_backend = "rule"
+    importance_hybrid_weight_raw = os.getenv("IMPORTANCE_HYBRID_BERT_WEIGHT", "0.6")
+    importance_max_length_raw = os.getenv("IMPORTANCE_MAX_LENGTH", "128")
+    importance_device = os.getenv("IMPORTANCE_BERT_DEVICE", "auto").strip().lower()
+    if importance_device not in {"auto", "cpu", "cuda"}:
+        importance_device = "auto"
     try:
         timeout_value = float(timeout_raw)
     except ValueError:
@@ -46,8 +60,18 @@ def load_config_from_env() -> MessageStructuringConfig:
         redis_max_buffer_value = int(redis_max_buffer_raw)
     except ValueError:
         redis_max_buffer_value = 1000
+    try:
+        importance_hybrid_weight = float(importance_hybrid_weight_raw)
+    except ValueError:
+        importance_hybrid_weight = 0.6
+    try:
+        importance_max_length = int(importance_max_length_raw)
+    except ValueError:
+        importance_max_length = 128
 
     threshold_value = max(0.0, min(threshold_value, 1.0))
+    importance_hybrid_weight = max(0.0, min(importance_hybrid_weight, 1.0))
+    importance_max_length = max(8, importance_max_length)
 
     return MessageStructuringConfig(
         summary_client_mode=mode,
@@ -60,4 +84,10 @@ def load_config_from_env() -> MessageStructuringConfig:
         redis_key_prefix=os.getenv("REDIS_KEY_PREFIX", "msl").strip() or "msl",
         redis_buffer_ttl_seconds=max(1, redis_buffer_ttl_value),
         redis_max_buffer_messages=max(1, redis_max_buffer_value),
+        importance_backend=importance_backend,
+        importance_bert_model_path=os.getenv("IMPORTANCE_BERT_MODEL_PATH", "models/importance_bert").strip(),
+        importance_bert_base_model=os.getenv("IMPORTANCE_BERT_BASE_MODEL", "hfl/chinese-macbert-base").strip(),
+        importance_bert_device=importance_device,
+        importance_hybrid_bert_weight=importance_hybrid_weight,
+        importance_max_length=importance_max_length,
     )

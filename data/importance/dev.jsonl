@@ -1,0 +1,14 @@
+{"text": "会议改到周四 16:00", "label": 0.62, "source": "handcrafted"}
+{"text": "{\"text\": \"好的\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "哈哈哈", "label": 0.02, "source": "handcrafted"}
+{"text": "ok", "label": 0.03, "source": "handcrafted"}
+{"text": "{\"text\": \"cleanup 文档已更新\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"周会 agenda 已整理\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"@_user_1 hello\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"收到\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_001\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"RAG module offline eval pass rate 92%\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"同步会后补充行动项\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\":\"This payload is broken\"", "label": 0.2, "source": "feishu_malformed_content.json"}
+{"text": "{\"text\": \"嗯嗯\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"明天 15:00 同步修复进展\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}

@@ -1,0 +1,14 @@
+{"text": "{\"text\": \"summary 结果去重逻辑需要修复\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"PPT 框架已完成，明早补充数据页\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"检索结果出现偏差，可能是索引延迟\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"明天下午同步修复结果\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"登录模块仍有报错，继续排查\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"gateway 配置迁移完成\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"summary pipeline 需要补充 rerank\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"embedding cache miss 太高，需要排查\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"api compatibility test 发现字段不一致\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"周五做项目汇报彩排\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"本周交付物先以文档为主\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"今天 17:30 前给出会议材料\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"后续我排查 token 服务\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"检索链路建议增加 fallback\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}

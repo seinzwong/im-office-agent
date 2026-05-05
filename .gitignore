@@ -4,3 +4,5 @@ __pycache__/
 .env
 .venv/
 .codex/
+models/importance_base/
+models/importance_bert/

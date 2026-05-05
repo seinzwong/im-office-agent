@@ -29,7 +29,7 @@ class MessageStructuringOrchestrator:
         self.config = config or load_config_from_env()
         self.store = self._build_store()
         self.event_buffer = self._build_event_buffer()
-        self.importance_component = SummaryCandidateSelector()
+        self.importance_component = SummaryCandidateSelector(config=self.config)
         self.deliverable_component = DeliverableExtractor(llm_client=None)
         self.topic_tracker = TopicTracker()
         self.summary_updater = IncrementalSummaryUpdater(

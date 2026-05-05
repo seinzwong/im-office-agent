@@ -1,0 +1,112 @@
+{"text": "明天 18:00 前交付 PRD 初稿", "label": 0.88, "source": "handcrafted"}
+{"text": "{\"text\": \"哈哈\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "目前进展顺利，预计明天完成", "label": 0.68, "source": "handcrafted"}
+{"text": "{\"text\": \"先观察 10 分钟，若异常继续回滚\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"PPT 终版今晚发出\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"明早同步 incident 复盘结论\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"ok\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"收到\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"需要补充无 Redis 场景回归测试\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"哈哈哈\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"title\":\"Weekly Project Sync\",\"content\":[[{\"tag\":\"text\",\"text\":\"Meeting moved to Friday 15:00.\"},{\"tag\":\"text\",\"text\":\"Please bring PRD and rollout plan.\"}]]}", "label": 0.6, "source": "feishu_post_message.json"}
+{"text": "本周评审 API migration 风险", "label": 0.78, "source": "handcrafted"}
+{"text": "{\"text\": \"API migration 需要补一个回滚步骤\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "我来处理，先回滚上一版", "label": 0.8, "source": "handcrafted"}
+{"text": "{\"text\": \"明天给结论\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"明天下午 3 点同步所有模块状态\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"先回滚\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"下周评审摘要模块改造方案\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"修复配置并重启登录服务\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"周三早上开评审会\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"chunk 策略改成 400 tokens 后效果更稳\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"收到\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "收到", "label": 0.05, "source": "handcrafted"}
+{"text": "{\"text\": \"迁移后旧接口流量下降到 15%\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_002\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"本周完成 Redis 移除验收\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"本周五完成 API migration 收尾\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"RAG 线上实验 AB 数据已收集\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"同步结果\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"dependency cleanup PR 已提交\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"API migration 第一阶段完成，网关路由切到 v2\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"我负责推进\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"收到\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"登录接口仍有 500，继续盯监控\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"请把方案文档同步到项目盘\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"redis fallback 代码可以删掉\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"继续观察\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"我来处理\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"image_key\":\"img_v2_fixture_001\"}", "label": 0.08, "source": "feishu_image_message.json"}
+{"text": "请把方案文档今晚发我邮箱", "label": 0.8, "source": "handcrafted"}
+{"text": "{\"text\": \"排查中\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"本周例会改到周四下午\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"继续关注登录 API error 率\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"明天同步\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"deliverable list: PRD, PPT, summary\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"ok\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"请确认汇报时间和参会人\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"哈哈哈\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"会议室预定完成\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"继续排查\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"ok\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"meeting invite 已经发出\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"cutover checklist 还缺监控项\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"roger\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"迁移过程中发现认证 header 差异\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"gateway mapping 文档已更新\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"线上登录接口 500 了，用户无法登录\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"v1 接口下周准备下线\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"RAG rerank 参数需要回调\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"总结文档需要补充风险章节\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_003\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"排查发现网关配置错误\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"api migration status: 80% complete\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "RAG 摘要模块需要补充 rerank", "label": 0.74, "source": "handcrafted"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_004\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"remove Redis from startup config\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"周会改到周四 16:00\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"ok\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"embedding 索引重建完成\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "@Tom hello", "label": 0.08, "source": "handcrafted"}
+{"text": "{\"text\": \"好的\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_005\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"请确认评审会参会名单\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"嗯嗯\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"先修复\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "线上登录接口 500 了，用户无法登录", "label": 0.9, "source": "handcrafted"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_000\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "好的", "label": 0.05, "source": "handcrafted"}
+{"text": "{\"text\": \"我们先优化 prompt，再观察摘要一致性\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"评审会需要产品和研发都参加\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"依赖清单里还有 redis client\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"@_user_1 hello\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"好的好的\"}", "label": 0.08, "source": "topic_eval:noise"}
+{"text": "{\"text\": \"需要补充 migration rollback runbook\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "token 服务延迟升高，继续排查", "label": 0.82, "source": "handcrafted"}
+{"text": "{\"text\": \"incident update: login service recovered\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_006\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\": \"rollback 已完成，准备复盘\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"请确认下周站会时间\"}", "label": 0.75, "source": "topic_eval:meeting_schedule"}
+{"text": "{\"text\": \"PRD review comments 已合并\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"我来处理，先回滚上一版\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"迁移脚本需要支持灰度回滚\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"回滚完成\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"Redis dependency removal 开始执行\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"先把缓存读逻辑切到内存实现\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"修复补丁已上线，等待验证\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"替换缓存后延迟变化可接受\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"token service latency spikes, keep investigating\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"用户登录恢复，监控正常\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"我来处理登录告警\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"PPT 明天中午前发终版\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"更新向量库后摘要质量提升\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"登录故障处理完成，发总结\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"cleanup PR 合并后去掉 Redis client\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
+{"text": "{\"text\": \"新增回归用例覆盖关键路由\"}", "label": 0.85, "source": "topic_eval:api_migration"}
+{"text": "{\"text\": \"今天下班前交付 PRD 初稿\"}", "label": 0.75, "source": "topic_eval:prd_ppt_delivery"}
+{"text": "{\"text\": \"我来跟进\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"text\": \"RAG 摘要模块召回率下降，需要检查 embedding 维度\"}", "label": 0.75, "source": "topic_eval:rag_summary_module"}
+{"text": "{\"text\": \"后续排查 token 服务调用链\"}", "label": 0.85, "source": "topic_eval:login_incident"}
+{"text": "{\"image_key\": \"img_topic_eval_noise_007\"}", "label": 0.08, "source": "topic_eval:image_noise"}
+{"text": "{\"text\":\"@_user_1 Decision: API rollout deadline is tomorrow 18:00. Please finish PRD and send update to dev-team@example.com.\"}", "label": 0.85, "source": "feishu_text_important.json"}
+{"text": "{\"text\": \"Redis 依赖删除后本地启动正常\"}", "label": 0.85, "source": "topic_eval:redis_removal"}
