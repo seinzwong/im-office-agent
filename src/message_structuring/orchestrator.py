@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
 
 from .components.deliverables import DeliverableExtractor
 from .components.importance import SummaryCandidateSelector
 from .components.topic_tracker import TopicTracker
 from .config import MessageStructuringConfig, load_config_from_env
+from .event_buffers.memory import MemoryEventBuffer
+from .event_buffers.redis_buffer import RedisEventBuffer
 from .preprocessor import parse_feishu_event
 from .schemas import (
     AnnotationStatus,
     QualityMetrics,
     StructuringResult,
-    SummaryItem,
     SummarySection,
     TaskBrief,
     TaskSession,
@@ -20,15 +20,15 @@ from .schemas import (
 from .summary_clients.stub import StubSummaryClient
 from .summary_clients.teammate_http import TeammateHTTPSummaryClient
 from .summary_updater import IncrementalSummaryUpdater
-from .task_manager import InMemoryTaskManager
-from .timeline_store import InMemoryTimelineStore
+from .stores.memory import MemoryStructuringStore
+from .stores.redis_store import RedisStructuringStore
 
 
 class MessageStructuringOrchestrator:
     def __init__(self, config: MessageStructuringConfig | None = None) -> None:
         self.config = config or load_config_from_env()
-        self.task_manager = InMemoryTaskManager()
-        self.timeline_store = InMemoryTimelineStore()
+        self.store = self._build_store()
+        self.event_buffer = self._build_event_buffer()
         self.importance_component = SummaryCandidateSelector()
         self.deliverable_component = DeliverableExtractor(llm_client=None)
         self.topic_tracker = TopicTracker()
@@ -36,9 +36,36 @@ class MessageStructuringOrchestrator:
             summary_client=self._build_summary_client(),
             importance_threshold=self.config.summary_importance_threshold,
         )
-        self._summary_items: dict[str, list[SummaryItem]] = {}
-        self._summary_item_ids: dict[str, set[str]] = {}
-        self._lock = Lock()
+
+    def _build_store(self):
+        if self.config.store_backend == "redis":
+            try:
+                return RedisStructuringStore(
+                    redis_url=self.config.redis_url,
+                    key_prefix=self.config.redis_key_prefix,
+                )
+            except Exception:
+                return MemoryStructuringStore()
+        return MemoryStructuringStore()
+
+    def _build_event_buffer(self):
+        if self.config.store_backend == "redis":
+            try:
+                return RedisEventBuffer(
+                    redis_url=self.config.redis_url,
+                    key_prefix=self.config.redis_key_prefix,
+                    ttl_seconds=self.config.redis_buffer_ttl_seconds,
+                    max_messages=self.config.redis_max_buffer_messages,
+                )
+            except Exception:
+                return MemoryEventBuffer(
+                    ttl_seconds=self.config.redis_buffer_ttl_seconds,
+                    max_messages=self.config.redis_max_buffer_messages,
+                )
+        return MemoryEventBuffer(
+            ttl_seconds=self.config.redis_buffer_ttl_seconds,
+            max_messages=self.config.redis_max_buffer_messages,
+        )
 
     def _build_summary_client(self):
         if self.config.summary_client_mode == "http":
@@ -50,23 +77,23 @@ class MessageStructuringOrchestrator:
         return StubSummaryClient()
 
     def start_task(self, chat_id: str, activation_source: str = "manual_api", task_title: str | None = None) -> TaskSession:
-        return self.task_manager.start_task(chat_id, activation_source=activation_source, task_title=task_title)
+        return self.store.start_task(chat_id, activation_source=activation_source, task_title=task_title)
 
     def stop_task(self, task_id: str, reason: str = "manual") -> TaskSession | None:
-        return self.task_manager.stop_task(task_id, reason=reason)
+        return self.store.stop_task(task_id, reason=reason)
 
     def get_task(self, task_id: str) -> TaskSession | None:
-        return self.task_manager.get_task(task_id)
+        return self.store.get_task(task_id)
 
     def set_activation_state(self, chat_id: str, active: bool, task_title: str | None = None) -> dict:
         if active:
-            existing = self.task_manager.get_active_task(chat_id)
+            existing = self.store.get_active_task(chat_id)
             if existing is not None:
                 return {"status": "already_active", "task": existing.model_dump(mode="json")}
             task = self.start_task(chat_id=chat_id, activation_source="activation_state", task_title=task_title)
             return {"status": "activated", "task": task.model_dump(mode="json")}
 
-        existing = self.task_manager.get_active_task(chat_id)
+        existing = self.store.get_active_task(chat_id)
         if existing is None:
             return {"status": "already_inactive", "chat_id": chat_id}
         stopped = self.stop_task(existing.task_id, reason="activation_off")
@@ -77,12 +104,13 @@ class MessageStructuringOrchestrator:
         if not chat_id:
             return {"status": "ignored", "reason": "missing_chat_id"}
 
-        task = self.task_manager.get_active_task(chat_id)
+        task = self.store.get_active_task(chat_id)
         if task is None:
+            self.event_buffer.append(chat_id, raw_event)
             return {"status": "ignored", "reason": "no_active_task", "chat_id": chat_id}
 
         message = parse_feishu_event(raw_event, task_id=task.task_id)
-        self.timeline_store.append_message(task.task_id, message)
+        self.store.append_message(task.task_id, message)
         if message.dedup.is_duplicate:
             return {"status": "duplicate", "message": message.model_dump(mode="json")}
 
@@ -112,22 +140,24 @@ class MessageStructuringOrchestrator:
                     result = future.result()
                     if component_name == "topic":
                         topic_annotation, topic_node = result
-                        self.timeline_store.update_annotation(task.task_id, message.message_id, "topic", topic_annotation)
+                        self.store.update_annotation(task.task_id, message.message_id, "topic", topic_annotation)
                     else:
-                        self.timeline_store.update_annotation(task.task_id, message.message_id, component_name, result)
+                        self.store.update_annotation(task.task_id, message.message_id, component_name, result)
                 except Exception as exc:
                     annotation = getattr(message.annotations, component_name)
                     annotation.status = AnnotationStatus.ERROR
                     annotation.reason = f"{component_name} failed: {exc}"
-                    self.timeline_store.update_annotation(task.task_id, message.message_id, component_name, annotation)
+                    self.store.update_annotation(task.task_id, message.message_id, component_name, annotation)
 
-        stored_message = self.timeline_store.get_message(task.task_id, message.message_id) or message
+        topics_for_store = self.topic_tracker.get_topics(task.task_id)
+        self.store.set_topics(task.task_id, topics_for_store)
+        stored_message = self.store.get_message(task.task_id, message.message_id) or message
         self._apply_summary_for_message(task.task_id, stored_message)
 
         return {
             "status": "processed",
             "task_id": task.task_id,
-            "message": (self.timeline_store.get_message(task.task_id, message.message_id) or stored_message).model_dump(mode="json"),
+            "message": (self.store.get_message(task.task_id, message.message_id) or stored_message).model_dump(mode="json"),
             "topic_updated": topic_node is not None,
         }
 
@@ -146,29 +176,22 @@ class MessageStructuringOrchestrator:
             topics = self.topic_tracker.get_topics(task_id)
             summary_item = self.summary_updater.maybe_update(message, topics)
             if summary_item:
-                with self._lock:
-                    item_ids = self._summary_item_ids.setdefault(task_id, set())
-                    items = self._summary_items.setdefault(task_id, [])
-                    if summary_item.summary_item_id not in item_ids:
-                        item_ids.add(summary_item.summary_item_id)
-                        items.append(summary_item)
-            self.timeline_store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
+                self.store.add_summary_item(task_id, summary_item)
+            self.store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
         else:
             message.annotations.summary.status = AnnotationStatus.SKIPPED
             message.annotations.summary.reason = "skipped due to upstream component failure"
-            self.timeline_store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
+            self.store.update_annotation(task_id, message.message_id, "summary", message.annotations.summary)
 
     def reprocess_summary(self, task_id: str) -> dict:
-        task = self.task_manager.get_task(task_id)
+        task = self.store.get_task(task_id)
         if task is None:
             return {"status": "not_found", "task_id": task_id}
 
-        with self._lock:
-            self._summary_items[task_id] = []
-            self._summary_item_ids[task_id] = set()
+        self.store.clear_summary_items(task_id)
         self.summary_updater.reset_seen()
 
-        for message in self.timeline_store.get_messages(task_id):
+        for message in self.store.get_messages(task_id):
             message.annotations.summary.status = AnnotationStatus.NOT_SELECTED
             message.annotations.summary.summary_item_ids = []
             message.annotations.summary.reason = "reprocessing"
@@ -177,35 +200,35 @@ class MessageStructuringOrchestrator:
         return {
             "status": "ok",
             "task_id": task_id,
-            "summary_count": len(self._summary_items.get(task_id, [])),
+            "summary_count": len(self.store.get_summary_items(task_id)),
         }
 
     def get_messages(self, task_id: str) -> list[dict] | dict:
-        task = self.task_manager.get_task(task_id)
+        task = self.store.get_task(task_id)
         if task is None:
             return {"status": "not_found", "task_id": task_id}
-        return [m.model_dump(mode="json") for m in self.timeline_store.get_messages(task_id)]
+        return [m.model_dump(mode="json") for m in self.store.get_messages(task_id)]
 
     def get_topics(self, task_id: str) -> list[dict] | dict:
-        task = self.task_manager.get_task(task_id)
+        task = self.store.get_task(task_id)
         if task is None:
             return {"status": "not_found", "task_id": task_id}
-        return [t.model_dump(mode="json") for t in self.topic_tracker.get_topics(task_id)]
+        return [t.model_dump(mode="json") for t in self.store.get_topics(task_id)]
 
     def get_summary(self, task_id: str) -> dict:
-        task = self.task_manager.get_task(task_id)
+        task = self.store.get_task(task_id)
         if task is None:
             return {"status": "not_found", "task_id": task_id}
-        return {"items": [item.model_dump(mode="json") for item in self._summary_items.get(task_id, [])]}
+        return {"items": [item.model_dump(mode="json") for item in self.store.get_summary_items(task_id)]}
 
     def get_result(self, task_id: str) -> dict:
-        task = self.task_manager.get_task(task_id)
+        task = self.store.get_task(task_id)
         if task is None:
             return {"status": "not_found", "task_id": task_id}
 
-        messages = self.timeline_store.get_messages(task_id)
-        topics = self.topic_tracker.get_topics(task_id)
-        summary_items = self._summary_items.get(task_id, [])
+        messages = self.store.get_messages(task_id)
+        topics = self.store.get_topics(task_id)
+        summary_items = self.store.get_summary_items(task_id)
 
         errors: list[str] = []
         for msg in messages:
@@ -214,7 +237,7 @@ class MessageStructuringOrchestrator:
                 if ann.status == AnnotationStatus.ERROR:
                     errors.append(f"{msg.message_id}:{name}:{ann.reason}")
 
-        processed_messages = self.timeline_store.get_processed_messages(task_id)
+        processed_messages = self.store.get_processed_messages(task_id)
         brief = TaskBrief(
             summary=" ".join([item.text for item in summary_items[:3]]).strip(),
             goal=task.task_title or "",
