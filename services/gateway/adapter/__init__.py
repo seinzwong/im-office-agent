@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .artifact_publisher import publish_agent_output, publish_ir
+from .artifact_publisher import publish_ir
 from .feishu_board_adapter import ir_to_feishu_board_draft, publish_ir_to_feishu_board
 from .feishu_doc_adapter import ir_to_feishu_doc_blocks, publish_ir_to_feishu_doc
 from .ir_normalizer import apply_json_patch, normalize_agent_ir_output
@@ -16,7 +16,6 @@ __all__ = [
     "ir_to_markdown",
     "ir_to_ppt_draft",
     "normalize_agent_ir_output",
-    "publish_agent_output",
     "publish_ir",
     "publish_ir_to_feishu_board",
     "publish_ir_to_feishu_doc",

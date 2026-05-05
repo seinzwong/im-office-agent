@@ -8,7 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .agents.registry import init_registry_from_settings
 from .config import get_settings
-from .routes import api_v1, lark_events
+from .routes import api_v1, lark_events, planb
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gateway")
@@ -36,6 +36,7 @@ def create_app() -> FastAPI:
 
     app.include_router(api_v1.router)
     app.include_router(lark_events.router)
+    app.include_router(planb.router)
     return app
 
 

@@ -2,63 +2,116 @@ from __future__ import annotations
 
 from typing import Any
 
-from .feishu_board_adapter import ir_to_feishu_board_draft, publish_ir_to_feishu_board
-from .feishu_doc_adapter import ir_to_feishu_doc_blocks, publish_ir_to_feishu_doc
-from .ir_normalizer import normalize_agent_ir_output
+from .feishu_board_adapter import publish_ir_to_feishu_board
+from .feishu_doc_adapter import publish_ir_to_feishu_doc
 from .ir_schema import ensure_ir_defaults, validate_ir
-from .markdown_adapter import ir_to_markdown
-from .ppt_adapter import ir_to_ppt_draft, publish_ir_to_ppt
+from .ppt_adapter import publish_ir_to_ppt
 
 
-def publish_ir(ir: dict, options: dict) -> dict:
+def publish_ir(
+    ir: dict,
+    publish_context: dict | None = None,
+    options: dict | None = None,
+) -> dict:
     warnings: list[str] = []
     normalized = ensure_ir_defaults(ir)
     validation = validate_ir(normalized)
     if validation:
-        return _error("IR_VALIDATION_FAILED", "IR validation failed", validation, warnings, ir_validation=validation)
+        return _error(
+            "IR_VALIDATION_FAILED",
+            "IR validation failed.",
+            validation,
+            warnings,
+            stage="validate_ir",
+            ir_validation=validation,
+            publish_result={},
+        )
 
+    publish_context = publish_context or {}
     options = options or {}
-    targets = options.get("targets") or ["doc"]
+    dry_run = bool(options.get("dry_run", True))
+    targets = _normalize_targets(options.get("target_outputs") or options.get("targets") or ["doc"])
+    folder_token = _first_non_empty(
+        publish_context.get("folder_token"),
+        options.get("folder_token"),
+    )
+    if not folder_token:
+        warnings.append("FEISHU_FOLDER_TOKEN_MISSING")
+
+    publish_result: dict[str, dict] = {}
+    for target in targets:
+        target_options = _target_options(options, target, dry_run, folder_token)
+        if target == "doc":
+            if not dry_run and not folder_token:
+                publish_result["doc"] = _error(
+                    "FEISHU_FOLDER_TOKEN_MISSING",
+                    "folder_token is required for real Feishu Doc publishing.",
+                    [],
+                    warnings=[],
+                    stage="publish_doc",
+                )
+            else:
+                publish_result["doc"] = publish_ir_to_feishu_doc(normalized, target_options)
+        elif target == "board":
+            if not dry_run:
+                warnings.append("Board real publishing is TODO in PlanB; adapter may use existing lark-cli path.")
+            publish_result["board"] = publish_ir_to_feishu_board(normalized, target_options)
+        elif target == "ppt":
+            if not dry_run:
+                warnings.append("PPT real publishing is TODO in PlanB; adapter may use existing lark-cli path.")
+            publish_result["ppt"] = publish_ir_to_ppt(normalized, target_options)
+        else:
+            publish_result[str(target)] = _error(
+                "INVALID_TARGET_OUTPUT",
+                f"Unsupported target output: {target}",
+                [target],
+                stage=f"publish_{target}",
+            )
+
+    for result in publish_result.values():
+        warnings.extend(result.get("warnings") or [])
+
+    return {
+        "ok": all(result.get("ok") is True for result in publish_result.values()),
+        "stage": "done",
+        "publish_result": publish_result,
+        "ir_validation": validation,
+        "warnings": _dedupe(warnings),
+    }
+
+
+def _target_options(options: dict, target: str, dry_run: bool, folder_token: Any) -> dict:
+    nested = options.get(target) if isinstance(options.get(target), dict) else {}
+    merged = {
+        **nested,
+        "dry_run": dry_run,
+    }
+    if folder_token:
+        merged["folder_token"] = folder_token
+    return merged
+
+
+def _normalize_targets(value: Any) -> list[str]:
+    if isinstance(value, str):
+        targets = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list):
+        targets = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        targets = ["doc"]
     if "all" in targets:
         targets = ["doc", "board", "ppt"]
-    target_results: dict[str, dict] = {}
-    for target in targets:
-        if target == "doc":
-            doc_options = {**options.get("doc", {}), "dry_run": options.get("dry_run", True)}
-            if "board" in targets:
-                doc_options.setdefault("include_whiteboard", True)
-            target_results["doc"] = publish_ir_to_feishu_doc(normalized, doc_options)
-        elif target == "board":
-            target_results["board"] = publish_ir_to_feishu_board(normalized, {**options.get("board", {}), "dry_run": options.get("dry_run", True)})
-        elif target == "ppt":
-            target_results["ppt"] = publish_ir_to_ppt(normalized, {**options.get("ppt", {}), "dry_run": options.get("dry_run", True)})
-        else:
-            target_results[str(target)] = _error("INVALID_PUBLISH_MODE", f"Unsupported target: {target}", [target], [])
-    for result in target_results.values():
-        warnings.extend(result.get("warnings") or [])
-    return {"ok": all(result.get("ok") is True for result in target_results.values()), "ir_validation": validation, "targets": target_results, "warnings": _dedupe(warnings)}
+    targets = [target for target in targets if target in {"doc", "board", "ppt"}]
+    return _dedupe(targets) or ["doc"]
 
 
-def publish_agent_output(agent_output: dict, options: dict, current_ir: dict | None = None) -> dict:
-    normalized = normalize_agent_ir_output(agent_output, current_ir)
-    if isinstance(normalized, dict) and normalized.get("ok") is False:
-        return normalized
-    return publish_ir(normalized, options)
-
-
-def build_ir_preview(ir: dict) -> dict:
-    normalized = ensure_ir_defaults(ir)
-    errors = validate_ir(normalized)
-    if errors:
-        return _error("IR_VALIDATION_FAILED", "IR validation failed", errors, [], ir_validation=errors)
-    return {
-        "ok": True,
-        "markdown": ir_to_markdown(normalized),
-        "doc_blocks": ir_to_feishu_doc_blocks(normalized),
-        "board_draft": ir_to_feishu_board_draft(normalized),
-        "ppt_draft": ir_to_ppt_draft(normalized),
-        "warnings": [],
-    }
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def _error(
@@ -83,3 +136,6 @@ def _dedupe(items: list[Any]) -> list[Any]:
             seen.add(marker)
             output.append(item)
     return output
+
+
+__all__ = ["publish_ir"]

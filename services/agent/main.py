@@ -6,30 +6,19 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import Response
 
-from services.agent.agents import (
-    generate_artifact_ir_patch,
-    update_structuring_summary,
-)
+from services.agent.agents import generate_ir_from_messages
 
-app = FastAPI(title="IM Office Agent Service", version="0.1.0")
+app = FastAPI(title="IM Office PlanB Agent", version="0.2.0")
 
 
 @app.get("/healthz")
 def healthz() -> Response:
-    """Return a minimal health response for service probes."""
-    return _json_response({"ok": "true"})
+    return _json_response({"ok": True})
 
 
-@app.post("/agent/update-structuring-summary")
-def update_structuring_summary_endpoint(payload: dict[str, Any]) -> Response:
-    """HTTP wrapper for structured topic/task summary updates."""
-    return _json_response(update_structuring_summary(payload))
-
-
-@app.post("/agent/generate-ir-patch")
-def generate_ir_patch_endpoint(payload: dict[str, Any]) -> Response:
-    """HTTP wrapper for Artifact IR patch generation."""
-    return _json_response(generate_artifact_ir_patch(payload))
+@app.post("/agent/generate-ir-from-messages")
+def generate_ir_from_messages_endpoint(payload: dict[str, Any]) -> Response:
+    return _json_response(generate_ir_from_messages(payload))
 
 
 def _json_response(payload: dict[str, Any]) -> Response:

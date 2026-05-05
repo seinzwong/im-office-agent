@@ -6,57 +6,35 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-
-AGENT_LLM_PROVIDER = "deepseek"
-AGENT_LLM_BASE_URL = "https://api.deepseek.com"
-AGENT_LLM_API_KEY = "YOUR_API_KEY_HERE"
-AGENT_LLM_MODEL = "deepseek-v4-pro"
-AGENT_TOPIC_LLM_MODEL = "deepseek-v4-flash"
-AGENT_TASK_LLM_MODEL = "deepseek-v4-pro"
-AGENT_IR_LLM_MODEL = "deepseek-v4-pro"
-AGENT_LLM_MOCK_MODE = False
-AGENT_IR_SCHEMA_VERSION = "0.2.0"
-AGENT_OUTPUT_DIR = "services/agent/output"
+IR_SCHEMA_VERSION = "0.2.0"
 
 
 @dataclass(frozen=True)
 class AgentSettings:
-    """Runtime settings for the agent service."""
-
     provider: str
     base_url: str
     api_key: str
     model: str
-    topic_model: str
-    task_model: str
-    ir_model: str
-    mock_mode: bool
-    ir_schema_version: str
-    output_dir: Path
     timeout_seconds: float = 60.0
+    temperature: float = 0.2
+    max_tokens: int = 3000
 
 
 @lru_cache(maxsize=1)
 def get_agent_settings() -> AgentSettings:
-    """Load agent settings from .env files and environment variables."""
     env = _load_agent_env()
     return AgentSettings(
-        provider=_env_value(env, "AGENT_LLM_PROVIDER", AGENT_LLM_PROVIDER),
-        base_url=_env_value(env, "AGENT_LLM_BASE_URL", AGENT_LLM_BASE_URL),
-        api_key=_env_value(env, "AGENT_LLM_API_KEY", AGENT_LLM_API_KEY),
-        model=_env_value(env, "AGENT_LLM_MODEL", AGENT_LLM_MODEL),
-        topic_model=_env_value(env, "AGENT_TOPIC_LLM_MODEL", AGENT_TOPIC_LLM_MODEL),
-        task_model=_env_value(env, "AGENT_TASK_LLM_MODEL", AGENT_TASK_LLM_MODEL),
-        ir_model=_env_value(env, "AGENT_IR_LLM_MODEL", AGENT_IR_LLM_MODEL),
-        mock_mode=_env_bool(env, "AGENT_LLM_MOCK_MODE", AGENT_LLM_MOCK_MODE),
-        ir_schema_version=AGENT_IR_SCHEMA_VERSION,
-        output_dir=_resolve_output_dir(_env_value(env, "AGENT_OUTPUT_DIR", AGENT_OUTPUT_DIR)),
+        provider=_env_value(env, "AGENT_LLM_PROVIDER"),
+        base_url=_env_value(env, "AGENT_LLM_BASE_URL"),
+        api_key=_env_value(env, "AGENT_LLM_API_KEY"),
+        model=_env_value(env, "AGENT_LLM_MODEL"),
         timeout_seconds=float(_env_value(env, "AGENT_LLM_TIMEOUT_SECONDS", "60")),
+        temperature=float(_env_value(env, "AGENT_LLM_TEMPERATURE", "0.2")),
+        max_tokens=int(_env_value(env, "AGENT_LLM_MAX_TOKENS", "3000")),
     )
 
 
 def clear_agent_settings_cache() -> None:
-    """Clear cached settings after changing environment variables in-process."""
     get_agent_settings.cache_clear()
 
 
@@ -66,13 +44,6 @@ def _repo_root() -> Path:
 
 def _agent_dir() -> Path:
     return Path(__file__).resolve().parent
-
-
-def _resolve_output_dir(raw: str) -> Path:
-    path = Path(raw)
-    if not path.is_absolute():
-        path = _repo_root() / path
-    return path.resolve()
 
 
 def _load_agent_env() -> dict[str, str]:
@@ -107,32 +78,16 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-def _env_value(env: dict[str, str], name: str, default: str) -> str:
+def _env_value(env: dict[str, str], name: str, default: str = "") -> str:
     raw = env.get(name)
     if raw is None or not raw.strip():
         return default
     return raw.strip()
 
 
-def _env_bool(env: dict[str, str], name: str, default: bool) -> bool:
-    raw = env.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 __all__ = [
-    "AGENT_IR_SCHEMA_VERSION",
-    "AGENT_LLM_API_KEY",
-    "AGENT_LLM_BASE_URL",
-    "AGENT_LLM_MOCK_MODE",
-    "AGENT_LLM_MODEL",
-    "AGENT_LLM_PROVIDER",
-    "AGENT_OUTPUT_DIR",
-    "AGENT_IR_LLM_MODEL",
-    "AGENT_TASK_LLM_MODEL",
-    "AGENT_TOPIC_LLM_MODEL",
     "AgentSettings",
+    "IR_SCHEMA_VERSION",
     "clear_agent_settings_cache",
     "get_agent_settings",
 ]
