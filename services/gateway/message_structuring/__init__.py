@@ -1,0 +1,43 @@
+"""Message structuring package."""
+
+from .schemas import (
+    AnnotationStatus,
+    DedupInfo,
+    DeliverableAnnotation,
+    DeliverableItem,
+    ImportanceAnnotation,
+    MentionInfo,
+    MessageAnnotations,
+    MessageContent,
+    MessageFeatures,
+    NormalizedMessage,
+    SenderInfo,
+    StructuringResult,
+    SummaryAnnotation,
+    SummaryItem,
+    TaskSession,
+    TopicAnnotation,
+    TopicMessageRef,
+    TopicNode,
+)
+
+__all__ = [
+    "AnnotationStatus",
+    "DedupInfo",
+    "DeliverableAnnotation",
+    "DeliverableItem",
+    "ImportanceAnnotation",
+    "MentionInfo",
+    "MessageAnnotations",
+    "MessageContent",
+    "MessageFeatures",
+    "NormalizedMessage",
+    "SenderInfo",
+    "StructuringResult",
+    "SummaryAnnotation",
+    "SummaryItem",
+    "TaskSession",
+    "TopicAnnotation",
+    "TopicMessageRef",
+    "TopicNode",
+]
