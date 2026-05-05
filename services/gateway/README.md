@@ -52,7 +52,40 @@ Expected response:
 | --- | --- |
 | `GET /health` | Service health check. |
 | `/api/v1/*` | Frontend API, auth helpers, artifact list, delivery trigger. |
+| `/api/v1/structuring/*` | Message structuring task/session, Feishu ingest, topic, summary, and result APIs. |
 | `POST /lark/events` | Feishu/Lark event callback. |
+
+## Message Structuring APIs
+
+The gateway integrates the message structuring layer under `/api/v1/structuring`.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/structuring/tasks/start \
+  -H "Content-Type: application/json" \
+  -d "{\"chat_id\":\"oc_demo\",\"activation_source\":\"manual_api\"}"
+```
+
+Post a Feishu/Lark message event:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/structuring/events/feishu \
+  -H "Content-Type: application/json" \
+  -d @event.json
+```
+
+Fetch the structured result:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/structuring/tasks/<task_id>/result
+```
+
+Runtime knobs are read from environment variables, including
+`STORE_BACKEND`, `REDIS_URL`, `SUMMARY_CLIENT_MODE`, `TEAMMATE_SUMMARY_BASE_URL`,
+`TEAMMATE_SUMMARY_API_KEY`, `SUMMARY_IMPORTANCE_THRESHOLD`,
+`IMPORTANCE_BACKEND`, `IMPORTANCE_BERT_MODEL_PATH`, `IMPORTANCE_BERT_DEVICE`,
+`IMPORTANCE_HYBRID_BERT_WEIGHT`, `TOPIC_BACKEND`,
+`TOPIC_EMBEDDING_MODEL_PATH`, `TOPIC_EMBEDDING_DEVICE`,
+`TOPIC_EMBEDDING_ASSIGN_THRESHOLD`, and `TOPIC_EMBEDDING_UNCERTAIN_THRESHOLD`.
 
 ## Agent Protocol
 
@@ -85,3 +118,4 @@ For multiple agent services, copy `services/agent/agents.example.yaml` to `servi
 | `context_hygiene/` | Summary and delivery orchestration. |
 | `storage/` | Storage integration placeholders. |
 | `schemas/` | Schema placeholders. |
+| `message_structuring/` | Gateway-owned task/session, Feishu normalization, importance, topic, and summary pipeline. |
