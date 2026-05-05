@@ -42,6 +42,11 @@ try:
 except ImportError:
     def list_artifacts() -> list[Any]:
         return []
+from .context_hygiene.context_packet_builder import run_deliver_artifacts
+from .context_hygiene.topic_summary_service import run_summary_for_chat
+from .event_gateway.feishu_event_handler import router as feishu_event_router
+from .raw_timeline.raw_timeline_service import list_artifacts
+from .structuring_router import router as structuring_router
 
 log = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/api/v1")
@@ -223,6 +228,7 @@ def adapter_ir_preview(body: IrPreviewIn) -> dict[str, Any]:
 router = APIRouter()
 router.include_router(api_router)
 router.include_router(adapter_router)
+router.include_router(structuring_router)
 router.include_router(feishu_event_router)
 
 __all__ = ["api_router", "router"]

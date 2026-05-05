@@ -14,4 +14,8 @@ dist/
 .coverage
 htmlcov/
 .vscode/
-services/agent/output/
+.cursor/
+.codex/
+models/
+*.log
+*.tmp
