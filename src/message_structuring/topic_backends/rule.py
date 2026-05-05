@@ -231,6 +231,46 @@ class RuleTopicBackend:
     def get_topics(self, task_id: str) -> list[TopicNode]:
         return list(self._task_topics.get(task_id, {}).values())
 
+    def reassign_new_topic_to_existing(
+        self,
+        task_id: str,
+        new_topic_id: str,
+        target_topic_id: str,
+        message: NormalizedMessage,
+        role: str = "embedding_merge",
+    ) -> TopicNode | None:
+        task_topics = self._task_topics.get(task_id, {})
+        new_topic = task_topics.get(new_topic_id)
+        target_topic = task_topics.get(target_topic_id)
+        if new_topic is None or target_topic is None:
+            return None
+
+        # Remove this message reference from newly created topic if present.
+        removed = False
+        for idx in range(len(new_topic.refs) - 1, -1, -1):
+            if new_topic.refs[idx].message_id == message.message_id:
+                new_topic.refs.pop(idx)
+                removed = True
+                break
+        if removed:
+            new_topic.message_count = max(0, new_topic.message_count - 1)
+            new_topic.update_count = max(0, new_topic.update_count - 1)
+
+        # Attach message to target topic and register conversation activity.
+        updated_target = self._append_ref(target_topic, message, role=role)
+        self._register_activity(task_id, updated_target.topic_id, message)
+
+        # Drop empty new topic to avoid fragmentation.
+        if new_topic.message_count <= 0 or not new_topic.refs:
+            task_topics.pop(new_topic_id, None)
+            recent = self._task_recent_topic_ids.get(task_id)
+            if recent and new_topic_id in recent:
+                recent.remove(new_topic_id)
+            if self._task_recent_issue_topic.get(task_id) == new_topic_id:
+                self._task_recent_issue_topic[task_id] = updated_target.topic_id
+
+        return updated_target
+
     def should_skip_message(self, message: NormalizedMessage) -> tuple[bool, str]:
         normalized = (message.content.normalized_text or "").strip()
         plain = (message.content.plain_text or "").strip().lower()
