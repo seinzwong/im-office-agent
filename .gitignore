@@ -14,3 +14,4 @@ dist/
 .coverage
 htmlcov/
 .vscode/
+services/agent/output/
