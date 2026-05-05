@@ -6,3 +6,4 @@ __pycache__/
 .codex/
 models/importance_base/
 models/importance_bert/
+models/topic_embedding/
