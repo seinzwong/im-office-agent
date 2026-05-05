@@ -2,19 +2,22 @@
 
 - **框架**：[FastAPI](https://fastapi.tiangolo.com/)
 - **配置**：本目录 **`gateway.yaml`**（由 [`gateway.example.yaml`](gateway.example.yaml) 复制），启动时由 `app/config.py` 读取；键名为 snake_case，与 `Settings` 字段一致。
-- **飞书**：`lark_app_id` / `lark_app_secret` 换 **`tenant_access_token`**，经 **OpenAPI** 调用云盘与 docx 等（见 `app/feishu_openapi.py`）。
+- **飞书**：`lark_app_id` / `lark_app_secret` 换 **`tenant_access_token`**，经 **OpenAPI** 调用云盘与 docx 等（见 `app/feishu_openapi.py`）。可选：`lark_ws_events_enabled: true` 时在独立线程启动 **官方 SDK WebSocket 长连接** 收 `im.message.receive_v1`（见 `app/lark_bot/ws_runner.py`；须与开放平台事件订阅方式一致）。
 - **数据**：真源在飞书云盘 **`artifacts_drive_folder_token`** 指定目录；会话依赖 **`session_secret`**。
 - **外部 Agents**：在 **`gateway.yaml`** 中配置 `agents_base_url` + `agents_m2m_token`，或 `agents_registry_path` 指向 [`app/agents/agents.example.yaml`](app/agents/agents.example.yaml) 复制后的 `agents.yaml`。与 Agents 的 HTTP 约定见下文 **「Agents 调用协议」**（本仓库以此节为唯一协议说明）。
 
 ## 本地开发
 
+推荐使用 Conda 环境 **`web-312`**（与团队本地 Python 版本一致）：
+
 ```bash
+conda activate web-312
 cd services/gateway
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+若不使用 Conda，也可自行 `python -m venv .venv` 后 `pip install -r requirements.txt` 再启动 `uvicorn`。
 
 **勿**将含真实密钥的 `gateway.yaml` 提交进 Git。
 
@@ -25,7 +28,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ## 主要路由
 
 - `/api/v1/*`：BFF、开发触发、OAuth
-- `/lark/events`：飞书事件回调（URL 验证 `challenge`）
+- `/lark/events`：飞书事件 **HTTP 回调**（URL 验证 `challenge`）；与控制台「请求地址」订阅方式配套。若改为 **长连接**，请在 `gateway.yaml` 开启 `lark_ws_events_enabled` 且控制台改为长连接，此时可不依赖该 URL。
 
 前端见 [../../apps/web](../../apps/web)。
 

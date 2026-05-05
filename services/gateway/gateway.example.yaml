@@ -23,6 +23,9 @@ lark_app_secret: ""
 lark_event_encrypt_key: ""
 lark_verification_token: ""
 
+# 使用官方 SDK WebSocket 长连接收事件（须与开放平台「长连接」订阅方式一致；与 HTTP 回调二选一）
+lark_ws_events_enabled: false
+
 # 前端 H5 与 OAuth；须与开放平台「网页应用」域名/回调一致
 public_web_base_url: http://127.0.0.1:5173
 oauth_redirect_uri: http://127.0.0.1:8000/api/v1/auth/callback

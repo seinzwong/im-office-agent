@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
+from ..lark_bot.im_at_bot import im_receive_should_reply_not_ready_dict, submit_not_ready_reply_chat
+from ..lark_bot.im_summary_dispatch import try_parse_im_event_for_summary
 from ..pipelines.summary_from_event import run_summary_for_chat
 
 log = logging.getLogger(__name__)
@@ -30,33 +31,22 @@ async def lark_events(
             log.warning("unparsed event: %s", ev[:200])
             return {"ok": "true"}
 
-    msg = ev.get("message", ev) or {}
-    if not isinstance(msg, dict):
+    if not isinstance(ev, dict):
         return {"ok": "true"}
 
-    chat_id = (msg.get("chat_id") or (ev.get("chat_id") or "unknown"))[:64]
-    mid = (msg.get("message_id") or "unknown")[:100]
-    content = msg.get("content", "")
-    cj: dict[str, Any]
-    if isinstance(content, str) and content.strip().startswith("{"):
-        try:
-            cj = json.loads(content)
-        except Exception:  # noqa: BLE001
-            cj = {"text": content}
-    elif isinstance(content, str):
-        cj = {"text": content}
-    else:
-        cj = content if isinstance(content, dict) else {"text": str(content)}
-    text = str(cj.get("text", cj) or "")
-    hint = text[:200] if not text.strip().startswith("@") else " ".join(text.split()[1:200])[:200]
-    t0 = int(time.time())
-    if chat_id and chat_id != "unknown":
+    not_ready, cid = im_receive_should_reply_not_ready_dict(ev)
+    if not_ready:
+        submit_not_ready_reply_chat(cid)
+        return {"ok": "true"}
+
+    params = try_parse_im_event_for_summary(ev)
+    if params:
         background_tasks.add_task(
             run_summary_for_chat,
-            chat_id,
-            hint,
-            t0,
-            text or "（无文本）",
-            mid,
+            params.chat_id,
+            params.time_hint,
+            params.t0_unix,
+            params.text,
+            params.message_id,
         )
     return {"ok": "true"}

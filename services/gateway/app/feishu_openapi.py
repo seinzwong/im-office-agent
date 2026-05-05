@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -15,6 +16,7 @@ from .config import Settings
 log = logging.getLogger(__name__)
 
 _tenant_cache: dict[str, Any] = {"token": "", "exp": 0.0}
+_bot_open_id_cache: dict[str, Any] = {"open_id": "", "exp": 0.0}
 
 
 def _api_base(s: Settings) -> str:
@@ -50,6 +52,36 @@ def get_tenant_access_token(s: Settings) -> str:
     _tenant_cache["token"] = tok
     _tenant_cache["exp"] = now + max(60, exp)
     return tok
+
+
+def get_bot_open_id(s: Settings) -> str:
+    """当前应用机器人的 open_id，用于判断消息是否 @ 了本机器人（带缓存）。"""
+    if not (s.lark_app_id and s.lark_app_secret):
+        return ""
+    now = time.time()
+    if _bot_open_id_cache["open_id"] and now < float(_bot_open_id_cache["exp"]) - 300:
+        return str(_bot_open_id_cache["open_id"])
+    base = _api_base(s)
+    try:
+        token = get_tenant_access_token(s)
+        r = httpx.get(
+            f"{base}/open-apis/bot/v3/info",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30.0,
+        )
+        j = r.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("get_bot_open_id: 请求失败 %s", e)
+        return ""
+    if j.get("code", 0) != 0:
+        log.warning("bot/v3/info: code=%s msg=%s", j.get("code"), j.get("msg"))
+        return ""
+    bot = j.get("bot") or (j.get("data") or {}).get("bot") or {}
+    oid = str(bot.get("open_id") or "").strip()
+    if oid:
+        _bot_open_id_cache["open_id"] = oid
+        _bot_open_id_cache["exp"] = now + 3600
+    return oid
 
 
 def drive_list_folder_files(s: Settings, folder_token: str) -> list[dict[str, Any]]:
@@ -186,3 +218,88 @@ def docx_create_in_folder_with_plain_text(
             bj.get("msg"),
         )
     return (open_url, doc_id)
+
+
+def im_send_text_to_chat(s: Settings, chat_id: str, text: str) -> bool:
+    """向群聊发送文本消息（receive_id 为 chat_id）。"""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return False
+    base = _api_base(s)
+    token = get_tenant_access_token(s)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    body = {
+        "receive_id": cid,
+        "msg_type": "text",
+        "content": json.dumps({"text": text}, ensure_ascii=False),
+    }
+    r = httpx.post(
+        f"{base}/open-apis/im/v1/messages",
+        params={"receive_id_type": "chat_id"},
+        headers=headers,
+        json=body,
+        timeout=30.0,
+    )
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        log.warning("im/v1/messages: 非 JSON 响应 status=%s", r.status_code)
+        return False
+    if j.get("code", 0) != 0:
+        log.warning(
+            "im/v1/messages text: code=%s msg=%s chat=%s...",
+            j.get("code"),
+            j.get("msg"),
+            cid[:16],
+        )
+        return False
+    return True
+
+
+def im_send_interactive_markdown_to_chat(s: Settings, chat_id: str, markdown: str) -> bool:
+    """向群聊发送一条含 Markdown 的交互卡片（用于 <at id=\"ou_xxx\"></at> 等）。"""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return False
+    base = _api_base(s)
+    token = get_tenant_access_token(s)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    card = {
+        "schema": "2.0",
+        "config": {"update_multi": True},
+        "body": {
+            "elements": [{"tag": "markdown", "content": markdown}],
+        },
+    }
+    body = {
+        "receive_id": cid,
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+    }
+    r = httpx.post(
+        f"{base}/open-apis/im/v1/messages",
+        params={"receive_id_type": "chat_id"},
+        headers=headers,
+        json=body,
+        timeout=30.0,
+    )
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        log.warning("im/v1/messages interactive: 非 JSON 响应 status=%s", r.status_code)
+        return False
+    if j.get("code", 0) != 0:
+        log.warning(
+            "im/v1/messages interactive: code=%s msg=%s chat=%s...",
+            j.get("code"),
+            j.get("msg"),
+            cid[:16],
+        )
+        return False
+    return True

@@ -4,7 +4,7 @@
 
 1. 终端 A：Gateway  
    - 在 `services/gateway` 将 [`gateway.example.yaml`](../services/gateway/gateway.example.yaml) 复制为 **`gateway.yaml`**，填写 `dev_skip_lark`、`agents_base_url`、`agents_m2m_token` 等。多实例时复制 [`app/agents/agents.example.yaml`](../services/gateway/app/agents/agents.example.yaml) 为 `services/gateway/app/agents/agents.yaml`，在 **`gateway.yaml`** 中设置 `agents_registry_path: app/agents/agents.yaml`，且注册表中 `routing` 须包含 `summary_from_chat`、`deliver_whiteboard`、`deliver_slides`。  
-   - 启动：`cd services/gateway && python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000`
+   - 启动（推荐 Conda `web-312`）：`conda activate web-312 && cd services/gateway && pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000`；或使用 `python -m venv .venv` 后激活再 `pip install` 与 `uvicorn`。
 2. 终端 B：前端  
    - 在 `apps/web` 将 [`config.example.yaml`](../apps/web/config.example.yaml) 复制为 **`config.yaml`**（可选；用于 dev 端口与 Gateway 代理地址）。  
    - 启动：`cd apps/web && npm i && npm run dev`

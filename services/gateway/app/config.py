@@ -28,6 +28,7 @@ _ENV_TO_FIELD: tuple[tuple[str, str], ...] = (
     ("LARK_EVENT_ENCRYPT_KEY", "lark_event_encrypt_key"),
     ("LARK_VERIFICATION_TOKEN", "lark_verification_token"),
     ("LARK_BASE_URL", "lark_base_url"),
+    ("LARK_WS_EVENTS_ENABLED", "lark_ws_events_enabled"),
     ("LARK_CLI_PATH", "lark_cli_path"),
     ("CORS_ORIGINS", "cors_origins"),
 )
@@ -75,6 +76,8 @@ def _parse_dotenv(path: Path) -> dict[str, str]:
 
 def _coerce_field(field: str, raw: str) -> Any:
     if field == "dev_skip_lark":
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    if field == "lark_ws_events_enabled":
         return raw.strip().lower() in ("1", "true", "yes", "on")
     return raw
 
@@ -157,6 +160,7 @@ class Settings(BaseModel):
     lark_event_encrypt_key: str = ""
     lark_verification_token: str = ""
     lark_base_url: str = "https://open.feishu.cn"
+    lark_ws_events_enabled: bool = False
 
     artifacts_drive_folder_token: str = ""
     dev_skip_lark: bool = False
