@@ -108,6 +108,7 @@ def deliver(
     sl = bool(body.deliverables.get("slides", False))
     if not w and not sl:
         raise HTTPException(400, "请至少选择画板或 PPT 之一")
+    log.info("deliver accepted file_count=%s whiteboard=%s slides=%s", len(body.file_tokens), w, sl)
     background_tasks.add_task(
         run_deliver_artifacts,
         body.file_tokens,

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import time
+import logging
 from typing import Any
 
-from services.agent.agents import generate_ir_from_messages
+from services.agent.agents import (
+    generate_content_ir_from_messages,
+    generate_slide_draft_from_content_ir,
+)
 from services.agent.request_normalizer import normalize_agent_ir_request
 from services.gateway.adapter import publish_ir
-from services.gateway.adapter.ir_schema import ensure_ir_defaults, validate_ir
+from services.gateway.adapter.ir_schema import ensure_ir_defaults
 from services.gateway.app.config import get_settings
 
 JsonDict = dict[str, Any]
+log = logging.getLogger(__name__)
 
 
 def run_planb_e2e(raw_request: dict) -> dict:
@@ -28,29 +33,45 @@ def run_planb_e2e(raw_request: dict) -> dict:
 
     request = normalized["request"]
     _fill_publish_context_defaults(request.get("publish_context") or {}, warnings)
-
-    agent_result = generate_ir_from_messages(request)
-    warnings.extend(agent_result.get("warnings") or [])
-    if agent_result.get("ok") is not True:
-        return _finish(
-            "generate_ir",
-            _error_from_result(agent_result, default_code="AGENT_IR_FAILED"),
-            warnings,
-            started_at,
-        )
-
-    ir = ensure_ir_defaults(agent_result.get("ir") or {})
-    validation = validate_ir(ir)
-    if validation:
-        return _finish(
-            "validate_ir",
-            _error("IR_VALIDATION_FAILED", "IR validation failed.", validation),
-            warnings,
-            started_at,
-        )
-
     publish_context = request.get("publish_context") or {}
-    options = request.get("options") or {}
+    options = dict(request.get("options") or {})
+    targets = _target_outputs(options)
+    content_ir = None
+    slide_draft = None
+    ir = _minimal_ir_from_request(request)
+
+    log.info("planb e2e content_ir started targets=%s", targets)
+    content_result = generate_content_ir_from_messages(request)
+    warnings.extend(content_result.get("warnings") or [])
+    if content_result.get("ok") is not True:
+        return _finish(
+            "generate_content_ir",
+            _error_from_result(content_result, default_code="CONTENT_IR_FAILED"),
+            warnings,
+            started_at,
+        )
+    content_ir = content_result.get("content_ir") or {}
+    if "ppt" in targets:
+        log.info("planb e2e slide_draft started")
+        slide_result = generate_slide_draft_from_content_ir(content_ir, options.get("ppt") or {})
+        warnings.extend(slide_result.get("warnings") or [])
+        if slide_result.get("ok") is not True:
+            return _finish(
+                "generate_slide_draft",
+                _error_from_result(slide_result, default_code="SLIDE_DRAFT_FAILED"),
+                warnings,
+                started_at,
+                extra={
+                    "request": _request_summary(request),
+                    "ir": ir,
+                    "content_ir": content_ir,
+                    "slide_draft": None,
+                    "publish_result": {},
+                },
+            )
+        slide_draft = slide_result.get("slide_draft") or {}
+        options["slide_draft"] = slide_draft
+    log.info("planb e2e publish_ir started targets=%s", targets)
     publish_result = publish_ir(ir, publish_context, options)
     warnings.extend(publish_result.get("warnings") or [])
     if publish_result.get("ok") is not True:
@@ -62,6 +83,8 @@ def run_planb_e2e(raw_request: dict) -> dict:
             extra={
                 "request": _request_summary(request),
                 "ir": ir,
+                "content_ir": content_ir,
+                "slide_draft": slide_draft,
                 "publish_result": publish_result.get("publish_result") or {},
             },
         )
@@ -74,6 +97,8 @@ def run_planb_e2e(raw_request: dict) -> dict:
         extra={
             "request": _request_summary(request),
             "ir": ir,
+            "content_ir": content_ir,
+            "slide_draft": slide_draft,
             "publish_result": publish_result.get("publish_result") or {},
         },
     )
@@ -96,6 +121,45 @@ def _request_summary(request: JsonDict) -> JsonDict:
         "target_outputs": options.get("target_outputs") or ["doc"],
         "dry_run": bool(options.get("dry_run", True)),
     }
+
+
+def _minimal_ir_from_request(request: JsonDict) -> JsonDict:
+    task = request.get("task") if isinstance(request.get("task"), dict) else {}
+    title = str(task.get("title") or task.get("goal") or "Generated Presentation").strip()
+    subtitle = str(task.get("goal") or "").strip()
+    return ensure_ir_defaults(
+        {
+            "schemaVersion": "0.2.0",
+            "docId": f"{str(task.get('task_id') or 'task')}_ppt_ir",
+            "meta": {
+                "title": title,
+                "subtitle": subtitle,
+                "owner": "Agent",
+                "audience": str(task.get("audience") or ""),
+            },
+            "theme": {},
+            "assets": {},
+            "blocks": [
+                {
+                    "id": "cover",
+                    "kind": "cover",
+                    "title": title,
+                    "subtitle": subtitle,
+                }
+            ],
+        }
+    )
+
+
+def _target_outputs(options: JsonDict) -> list[str]:
+    targets = options.get("target_outputs") or ["doc"]
+    if isinstance(targets, str):
+        targets = [item.strip() for item in targets.split(",") if item.strip()]
+    if not isinstance(targets, list):
+        return ["doc"]
+    if "all" in targets:
+        return ["doc", "board", "ppt"]
+    return [str(target).strip() for target in targets if str(target).strip()]
 
 
 def _finish(

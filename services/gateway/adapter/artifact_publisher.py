@@ -92,6 +92,8 @@ def _target_options(
         **nested,
         "dry_run": dry_run,
     }
+    if target == "ppt" and isinstance(options.get("slide_draft"), dict):
+        merged["slide_draft"] = options["slide_draft"]
     if folder_token:
         merged["folder_token"] = folder_token
     for key in ("user_access_token", "tenant_access_token", "authorized_user_id"):
