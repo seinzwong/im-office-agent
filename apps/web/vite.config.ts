@@ -44,6 +44,8 @@ export default defineConfig({
   server: {
     host,
     port,
+    strictPort: true,
+    allowedHosts: ["im-office-agent.nat100.top"],
     proxy: {
       "/api": proxy,
       "/lark": proxy,
