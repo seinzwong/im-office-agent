@@ -81,22 +81,71 @@ def publish_ir_to_feishu_doc(ir: dict, options: dict) -> dict:
         }
 
     config = _doc_config()
-    if not config["app_id"] or not config["app_secret"]:
-        warnings.append("FEISHU_APP_ID/FEISHU_APP_SECRET missing; fallback to dry_run.")
+    explicit_user_token = str(options.get("user_access_token") or env_value("FEISHU_USER_ACCESS_TOKEN") or "").strip()
+    explicit_tenant_token = str(options.get("tenant_access_token") or env_value("FEISHU_TENANT_ACCESS_TOKEN") or "").strip()
+    cli_user_mode = str(options.get("auth_mode") or env_value("FEISHU_DOC_AUTH_MODE")).strip().lower() == "cli_user"
+    if cli_user_mode and not explicit_user_token:
+        return _publish_doc_with_lark_cli_user(normalized, options, config, warnings)
+    if not (explicit_user_token or explicit_tenant_token) and (not config["app_id"] or not config["app_secret"]):
+        warnings.append("Feishu token/app credentials missing; fallback to dry_run.")
         return {"ok": True, "mode": "dry_run", "blocks_preview": draft_blocks, "warnings": warnings}
 
     try:
-        client = FeishuDocClient(config["app_id"], config["app_secret"], config["base_url"])
+        client = FeishuDocClient(
+            config["app_id"],
+            config["app_secret"],
+            config["base_url"],
+            user_access_token=explicit_user_token,
+            tenant_access_token=explicit_tenant_token,
+        )
         document_id = _resolve_document_id(client, normalized, options, config, mode, warnings)
         if not document_id:
             return adapter_error("FEISHU_DOC_API_FAILED", "document_id is missing.", [], warnings)
         client.create_blocks(document_id, children)
-        result = {"ok": True, "mode": mode, "document_id": document_id, "warnings": warnings}
+        result = {
+            "ok": True,
+            "mode": mode,
+            "document_id": document_id,
+            "auth_mode": client.auth_mode,
+            "warnings": warnings,
+        }
         if options.get("include_whiteboard"):
             result["whiteboard_result"] = append_blank_whiteboard_to_doc(document_id, str(options.get("as") or "user"))
         return result
     except Exception as exc:  # noqa: BLE001
         return adapter_error("FEISHU_DOC_API_FAILED", str(exc), [], warnings)
+
+
+def _publish_doc_with_lark_cli_user(ir: dict, options: dict, config: dict, warnings: list[str]) -> dict:
+    folder_token = extract_folder_token(options.get("folder_token") or config["folder_token"])
+    if not folder_token:
+        return adapter_error("FEISHU_DOC_FOLDER_TOKEN_MISSING", "folder_token is required for cli_user publishing.", [], warnings)
+    result = run_lark_cli(
+        [
+            "docs",
+            "+create",
+            "--title",
+            ir["meta"]["title"],
+            "--folder-token",
+            folder_token,
+            "--markdown",
+            ir_to_markdown(ir),
+            "--as",
+            "user",
+        ],
+        timeout=180,
+    )
+    if not result["ok"]:
+        return adapter_error("FEISHU_DOC_API_FAILED", "lark-cli docs +create failed.", result, warnings)
+    data = result["json"].get("data") or result["json"]
+    return {
+        "ok": True,
+        "mode": "create",
+        "auth_mode": "cli_user",
+        "document_id": data.get("doc_id") or data.get("document_id") or data.get("token"),
+        "url": data.get("doc_url") or data.get("url") or data.get("open_url"),
+        "warnings": warnings,
+    }
 
 
 def append_blank_whiteboard_to_doc(document_id: str, identity: str = "user") -> dict:
@@ -120,11 +169,29 @@ def append_blank_whiteboard_to_doc(document_id: str, identity: str = "user") -> 
 
 
 class FeishuDocClient:
-    def __init__(self, app_id: str, app_secret: str, base_url: str = "https://open.feishu.cn") -> None:
+    def __init__(
+        self,
+        app_id: str,
+        app_secret: str,
+        base_url: str = "https://open.feishu.cn",
+        *,
+        user_access_token: str = "",
+        tenant_access_token: str = "",
+    ) -> None:
         self.app_id = app_id
         self.app_secret = app_secret
         self.base_url = base_url.rstrip("/")
-        self._tenant_access_token: str | None = None
+        self._user_access_token = user_access_token.strip()
+        self._tenant_access_token: str | None = tenant_access_token.strip() or None
+
+    @property
+    def auth_mode(self) -> str:
+        return "user_access_token" if self._user_access_token else "tenant_access_token"
+
+    def authorization_header(self) -> dict[str, str]:
+        if self._user_access_token:
+            return {"Authorization": f"Bearer {self._user_access_token}"}
+        return {"Authorization": f"Bearer {self.get_tenant_access_token()}"}
 
     def get_tenant_access_token(self) -> str:
         if self._tenant_access_token:
@@ -145,7 +212,7 @@ class FeishuDocClient:
     def create_document(self, title: str, folder_token: str) -> dict:
         response = httpx.post(
             f"{self.base_url}/open-apis/docx/v1/documents",
-            headers={"Authorization": f"Bearer {self.get_tenant_access_token()}"},
+            headers=self.authorization_header(),
             json={"folder_token": folder_token, "title": title},
             timeout=30.0,
         )
@@ -158,7 +225,7 @@ class FeishuDocClient:
     def create_blocks(self, document_id: str, children: list[dict]) -> dict:
         response = httpx.post(
             f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children",
-            headers={"Authorization": f"Bearer {self.get_tenant_access_token()}"},
+            headers=self.authorization_header(),
             json={"children": children, "index": -1},
             timeout=30.0,
         )

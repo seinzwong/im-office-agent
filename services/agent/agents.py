@@ -129,7 +129,19 @@ def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
 
     try:
         body = response.json()
-        content = str(body["choices"][0]["message"]["content"])
+        message = body["choices"][0]["message"]
+        content = str(message.get("content") or "")
+        if not content.strip():
+            return _error(
+                "AGENT_LLM_EMPTY_CONTENT",
+                "Agent LLM returned an empty message.content.",
+                {
+                    "message_keys": sorted(message.keys()),
+                    "finish_reason": (body.get("choices") or [{}])[0].get("finish_reason"),
+                    "response_preview": _safe_json_preview(body),
+                },
+                debug={**debug, "llm_elapsed_ms": _elapsed_ms(started_at)},
+            )
         data = _parse_json_object(content)
     except Exception as exc:  # noqa: BLE001
         return _error(
@@ -142,7 +154,7 @@ def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
         return _error(
             "AGENT_LLM_INVALID_JSON",
             "Agent LLM response content is not a JSON object.",
-            [],
+            {"content_preview": content[:1200], "content_length": len(content)},
             debug={**debug, "llm_elapsed_ms": _elapsed_ms(started_at)},
         )
     return {
@@ -151,6 +163,15 @@ def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
         "warnings": _as_list(data.get("warnings")),
         "debug": {**debug, "llm_elapsed_ms": _elapsed_ms(started_at)},
     }
+
+
+def _safe_json_preview(value: Any, limit: int = 2000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except Exception:
+        text = str(value)
+    text = re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-***", text)
+    return text[:limit]
 
 
 def _extract_ir(data: JsonDict) -> JsonDict:
@@ -173,7 +194,10 @@ def _ensure_ir_defaults(ir: JsonDict, request: JsonDict) -> JsonDict:
     if not isinstance(meta, dict):
         meta = {}
         out["meta"] = meta
-    meta.setdefault("title", str(task.get("title") or "").strip())
+    title = str(meta.get("title") or "").strip()
+    if not title:
+        title = _infer_title_from_request(request)
+    meta["title"] = title
     meta.setdefault("subtitle", str(task.get("goal") or "").strip())
     meta.setdefault("owner", "Agent")
     meta.setdefault("date", date.today().isoformat())
@@ -243,6 +267,19 @@ def _parse_json_object(raw: str) -> JsonDict:
         except Exception:
             return {}
     return value if isinstance(value, dict) else {}
+
+
+def _infer_title_from_request(request: JsonDict) -> str:
+    task = _as_dict(request.get("task"))
+    for value in (task.get("title"), task.get("goal")):
+        text = str(value or "").strip()
+        if text:
+            return text[:80]
+    messages = _as_list(request.get("messages"))
+    joined = " ".join(str(message.get("text") or "") for message in messages if isinstance(message, dict))
+    if "onboarding" in joined.lower():
+        return "公司软件 onboarding 优化方案"
+    return "PlanB 工业 IR"
 
 
 def _default_theme() -> dict[str, str]:

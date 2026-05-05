@@ -40,7 +40,7 @@ def publish_ir(
 
     publish_result: dict[str, dict] = {}
     for target in targets:
-        target_options = _target_options(options, target, dry_run, folder_token)
+        target_options = _target_options(options, publish_context, target, dry_run, folder_token)
         if target == "doc":
             if not dry_run and not folder_token:
                 publish_result["doc"] = _error(
@@ -80,7 +80,13 @@ def publish_ir(
     }
 
 
-def _target_options(options: dict, target: str, dry_run: bool, folder_token: Any) -> dict:
+def _target_options(
+    options: dict,
+    publish_context: dict,
+    target: str,
+    dry_run: bool,
+    folder_token: Any,
+) -> dict:
     nested = options.get(target) if isinstance(options.get(target), dict) else {}
     merged = {
         **nested,
@@ -88,6 +94,9 @@ def _target_options(options: dict, target: str, dry_run: bool, folder_token: Any
     }
     if folder_token:
         merged["folder_token"] = folder_token
+    for key in ("user_access_token", "tenant_access_token", "authorized_user_id"):
+        if publish_context.get(key):
+            merged[key] = publish_context[key]
     return merged
 
 

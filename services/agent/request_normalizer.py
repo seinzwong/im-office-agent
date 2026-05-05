@@ -158,11 +158,16 @@ def _normalize_options(raw: JsonDict, task: JsonDict, warnings: list[str]) -> Js
         targets = ["doc", "board", "ppt"]
     targets = [target for target in targets if target in {"doc", "board", "ppt"}] or ["doc"]
 
-    return {
+    normalized = {
         "language": str(source.get("language") or raw.get("language") or "zh-CN"),
         "target_outputs": _dedupe(targets),
         "dry_run": _bool(source.get("dry_run"), default=_bool(raw.get("dry_run"), default=True)),
     }
+    for key in ("doc", "board", "ppt"):
+        value = source.get(key)
+        if isinstance(value, dict):
+            normalized[key] = value
+    return normalized
 
 
 def _error(code: str, message: str, details: Any | None = None, warnings: list[str] | None = None) -> JsonDict:
