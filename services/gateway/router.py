@@ -18,13 +18,34 @@ from fastapi import (
 from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
-from .context_hygiene.context_packet_builder import run_deliver_artifacts
-from .context_hygiene.topic_summary_service import run_summary_for_chat
-from .event_gateway.feishu_event_handler import router as feishu_event_router
-from .raw_timeline.raw_timeline_service import list_artifacts
+from .adapter.artifact_publisher import build_ir_preview, publish_agent_output, publish_ir
+
+try:
+    from .context_hygiene.context_packet_builder import run_deliver_artifacts
+except ImportError:
+    def run_deliver_artifacts(*args: Any, **kwargs: Any) -> None:
+        log.warning("run_deliver_artifacts is unavailable in this checkout.")
+
+try:
+    from .context_hygiene.topic_summary_service import run_summary_for_chat
+except ImportError:
+    def run_summary_for_chat(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": False, "open_url": "about:blank", "file_token": ""}
+
+try:
+    from .event_gateway.feishu_event_handler import router as feishu_event_router
+except ImportError:
+    feishu_event_router = APIRouter()
+
+try:
+    from .raw_timeline.raw_timeline_service import list_artifacts
+except ImportError:
+    def list_artifacts() -> list[Any]:
+        return []
 
 log = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/api/v1")
+adapter_router = APIRouter(prefix="/adapter")
 
 
 @api_router.get("/me")
@@ -144,6 +165,21 @@ class DevTriggerIn(BaseModel):
     aggregate_text: str = "Summarize project A and project B discussion."
 
 
+class PublishIrIn(BaseModel):
+    ir: dict[str, Any]
+    publish_options: dict[str, Any] = Field(default_factory=lambda: {"targets": ["doc", "board", "ppt"], "dry_run": True})
+
+
+class PublishAgentOutputIn(BaseModel):
+    agent_output: dict[str, Any]
+    current_ir: dict[str, Any] | None = None
+    publish_options: dict[str, Any] = Field(default_factory=lambda: {"targets": ["doc", "board", "ppt"], "dry_run": True})
+
+
+class IrPreviewIn(BaseModel):
+    ir: dict[str, Any]
+
+
 @api_router.post("/dev/trigger-summary")
 def dev_trigger(body: DevTriggerIn) -> dict[str, str]:
     t0 = body.t0_unix or int(time.time())
@@ -169,8 +205,24 @@ def dev_trigger(body: DevTriggerIn) -> dict[str, str]:
     }
 
 
+@adapter_router.post("/publish-ir")
+def adapter_publish_ir(body: PublishIrIn) -> dict[str, Any]:
+    return publish_ir(body.ir, body.publish_options)
+
+
+@adapter_router.post("/publish-agent-output")
+def adapter_publish_agent_output(body: PublishAgentOutputIn) -> dict[str, Any]:
+    return publish_agent_output(body.agent_output, body.publish_options, body.current_ir)
+
+
+@adapter_router.post("/ir-preview")
+def adapter_ir_preview(body: IrPreviewIn) -> dict[str, Any]:
+    return build_ir_preview(body.ir)
+
+
 router = APIRouter()
 router.include_router(api_router)
+router.include_router(adapter_router)
 router.include_router(feishu_event_router)
 
 __all__ = ["api_router", "router"]

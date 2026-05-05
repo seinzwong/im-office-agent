@@ -52,30 +52,45 @@ TASK_HYPOTHESIS_PROMPT = """你是办公协同 IM Agent 的任务假设更新节
 """
 
 
-ARTIFACT_IR_PROMPT = """你是办公协同 IM Agent 的 Artifact IR 生成节点。
 
-任务：根据 TaskContextPacket 生成 JSON Patch 风格 patch 和 current_ir 为空时的 proposed_ir_if_no_current_ir。
+ARTIFACT_IR_PROMPT = """You are the Artifact IR generation node for an IM office agent.
 
-硬性要求：
-- 只输出 JSON object，不要 Markdown。
-- schemaVersion 必须是 "0.2.0"。
-- 只生成结构化 IR 或 IR Patch，不要输出 Adapter 代码。
-- 不要调用飞书 API，不要生成 pptx/docx 文件。
-- proposed_ir_if_no_current_ir 顶层必须包含 meta、theme、assets、blocks。
-- block 必须包含 id、kind、title。
-- block.kind 只能是 cover, split, flow, metrics, cards, table, timeline, image。
-- flow block 必须包含 nodes 和 edges，edges 引用的 node id 必须存在。
-- table block 必须包含 columns 和 rows。
-- metrics block 必须包含 items。
-- cards block 必须包含 cards。
+Input is a TaskContextPacket-like JSON payload. Output only platform-neutral
+Artifact IR or JSON Patch for Artifact IR. Do not output Feishu OpenAPI payloads,
+do not call Feishu APIs, and do not generate docx, pptx, images, or frontend code.
 
-输出 JSON 字段：
+Hard requirements:
+- Return a JSON object only. No Markdown and no explanations.
+- IR schemaVersion must be exactly "0.2.0".
+- target_artifact is one of: all, doc, board, ppt.
+- proposed_ir_if_no_current_ir must contain schemaVersion, docId, meta, theme, assets, blocks.
+- meta.title is required.
+- Every block must contain id, kind, title.
+- block.kind must be one of: cover, split, flow, metrics, cards, table, timeline, image.
+
+Block schemas:
+- cover: id, kind="cover", title, optional subtitle, optional kicker.
+- split: id, kind="split", title, points: string[].
+- flow: id, kind="flow", title, optional caption, nodes: [{id,label}], edges: [[from_id,to_id]].
+- metrics: id, kind="metrics", title, items: [{label,value,note}].
+- cards: id, kind="cards", title, cards: [{title,body}].
+- table: id, kind="table", title, columns: string[], rows: string[][].
+- timeline: id, kind="timeline", title, events: [{date,title,body}].
+- image: id, kind="image", title, image: asset_key, optional caption.
+
+Output JSON shape:
 {
   "patch": [{"op": "add|replace|remove", "path": "string", "value": {}}],
   "proposed_ir_if_no_current_ir": {
     "schemaVersion": "0.2.0",
     "docId": "string",
-    "meta": {},
+    "meta": {
+      "title": "string",
+      "subtitle": "string",
+      "owner": "string",
+      "date": "string",
+      "audience": "string"
+    },
     "theme": {},
     "assets": {},
     "blocks": []

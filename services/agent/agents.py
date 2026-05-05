@@ -24,7 +24,7 @@ from services.agent.prompts import (
 JsonDict = dict[str, Any]
 ModelMode = Literal["real", "mock"]
 
-ALLOWED_ARTIFACTS = {"doc", "canvas", "deck"}
+ALLOWED_ARTIFACTS = {"all", "doc", "board", "ppt"}
 ALLOWED_BLOCK_KINDS = {
     "cover",
     "split",
@@ -214,7 +214,7 @@ def update_structuring_summary(payload: dict) -> dict:
 
 
 def generate_artifact_ir_patch(payload: dict) -> dict:
-    """Generate a JSON Patch and optional initial IR for doc/canvas/deck output.
+    """Generate a JSON Patch and optional initial IR for all/doc/board/ppt output.
 
     The function only emits IR schemaVersion 0.2.0 structures. It does not call
     Feishu APIs and does not generate docx, pptx, or Adapter-specific output.
@@ -227,7 +227,7 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
                 "ir_error",
                 _error(
                 "INVALID_TARGET_ARTIFACT",
-                "target_artifact must be one of: doc, canvas, deck",
+                "target_artifact must be one of: all, doc, board, ppt",
                 ),
                 started_at,
             )
@@ -248,13 +248,18 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
         proposed = result.get("proposed_ir_if_no_current_ir") or _build_initial_ir(
             state
         )
+        proposed = _ensure_industrial_ir(proposed)
         warnings = list(result.get("warnings") or [])
         warnings.extend(_validate_ir(proposed))
+
+        patch = result.get("patch") or []
+        if state.get("current_ir") is None:
+            patch = []
 
         result = {
             "artifact_type": target_artifact,
             "schemaVersion": get_agent_settings().ir_schema_version,
-            "patch": result.get("patch") or [],
+            "patch": patch,
             "proposed_ir_if_no_current_ir": proposed,
             "source_trace": result.get("source_trace") or [],
             "warnings": _dedupe(warnings),
@@ -273,6 +278,15 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
         return _persist_and_return(
             "ir_error", _error("AGENT_IR_FAILED", str(exc)), started_at
         )
+
+
+def generate_ir_from_task_context(payload: dict) -> dict:
+    """Compatibility entry point for TaskContextPacket-to-IR generation.
+
+    This is intentionally a thin wrapper around generate_artifact_ir_patch so
+    callers have a stable name while the Agent remains an IR-only layer.
+    """
+    return generate_artifact_ir_patch(payload)
 
 
 def build_topic_summary_graph() -> Any:
@@ -591,6 +605,8 @@ def _artifact_ir_node(state: ArtifactIRState) -> JsonDict:
     )
     fallback = _mock_artifact_ir(dict(state))
     proposed = result.get("proposed_ir_if_no_current_ir")
+    if isinstance(proposed, dict):
+        proposed = _ensure_industrial_ir(proposed)
     if not isinstance(proposed, dict) or _validate_ir(proposed):
         proposed = fallback["proposed_ir_if_no_current_ir"]
     patch = result.get("patch")
@@ -758,11 +774,30 @@ def _mock_artifact_ir(payload: JsonDict) -> JsonDict:
         "options": _as_dict(payload.get("options")),
     }
     proposed = _build_initial_ir(state)
-    patch = [
-        {"op": "replace", "path": "/meta/title", "value": proposed["meta"]["title"]}
-    ]
-    for block in proposed["blocks"]:
-        patch.append({"op": "add", "path": "/blocks/-", "value": block})
+    current_ir = state.get("current_ir")
+    if isinstance(current_ir, dict):
+        next_index = len(_as_list(current_ir.get("blocks"))) + 1
+        patch = [
+            {"op": "replace", "path": "/meta/title", "value": proposed["meta"]["title"]},
+            {
+                "op": "add",
+                "path": "/blocks/-",
+                "value": {
+                    "id": f"agent_update_{next_index}",
+                    "kind": "split",
+                    "title": "Agent Update",
+                    "points": [
+                        "This section was added by the IR Agent based on the latest TaskContextPacket."
+                    ],
+                },
+            },
+        ]
+    else:
+        patch = [
+            {"op": "replace", "path": "/meta/title", "value": proposed["meta"]["title"]}
+        ]
+        for block in proposed["blocks"]:
+            patch.append({"op": "add", "path": "/blocks/-", "value": block})
     return {
         "patch": patch,
         "proposed_ir_if_no_current_ir": proposed,
@@ -810,7 +845,7 @@ def _build_initial_ir(state: ArtifactIRState) -> JsonDict:
             for index, topic in enumerate(topics, start=1)
         ]
         edges = [
-            {"from": nodes[index]["id"], "to": nodes[index + 1]["id"]}
+            [nodes[index]["id"], nodes[index + 1]["id"]]
             for index in range(len(nodes) - 1)
         ]
         blocks.append(
@@ -874,6 +909,61 @@ def _build_initial_ir(state: ArtifactIRState) -> JsonDict:
     }
 
 
+def _ensure_industrial_ir(ir: JsonDict) -> JsonDict:
+    """Normalize Agent IR to the platform-independent schema 0.2.0."""
+    if not isinstance(ir, dict):
+        return {}
+    normalized = json.loads(json.dumps(ir, ensure_ascii=False))
+    normalized["schemaVersion"] = get_agent_settings().ir_schema_version
+    normalized.setdefault("docId", "task_ir")
+    normalized.setdefault("meta", {})
+    normalized.setdefault("theme", {})
+    normalized.setdefault("assets", {})
+    normalized.setdefault("blocks", [])
+    if isinstance(normalized["meta"], dict):
+        normalized["meta"].setdefault("title", "Generated Artifact")
+        normalized["meta"].setdefault("subtitle", "")
+        normalized["meta"].setdefault("owner", "Agent")
+        normalized["meta"].setdefault("date", date.today().isoformat())
+        normalized["meta"].setdefault("audience", "")
+    for block in _as_list(normalized.get("blocks")):
+        if not isinstance(block, dict):
+            continue
+        block.setdefault("id", _safe_id(str(block.get("title") or block.get("kind") or "block")))
+        block.setdefault("title", str(block.get("id") or "Untitled"))
+        if block.get("kind") == "flow":
+            edge_pairs = []
+            for edge in _as_list(block.get("edges")):
+                if isinstance(edge, dict):
+                    source = edge.get("from")
+                    target = edge.get("to")
+                elif isinstance(edge, list) and len(edge) >= 2:
+                    source = edge[0]
+                    target = edge[1]
+                else:
+                    continue
+                if source is not None and target is not None:
+                    edge_pairs.append([str(source), str(target)])
+            block["edges"] = edge_pairs
+            block.setdefault("nodes", [])
+        if block.get("kind") == "timeline":
+            events = block.get("events")
+            if not isinstance(events, list):
+                events = []
+                for item in _as_list(block.get("items")):
+                    if isinstance(item, dict):
+                        events.append(
+                            {
+                                "date": str(item.get("date") or item.get("label") or ""),
+                                "title": str(item.get("title") or item.get("label") or "Milestone"),
+                                "body": str(item.get("body") or item.get("text") or ""),
+                            }
+                        )
+                block["events"] = events
+                block.pop("items", None)
+    return normalized
+
+
 def _validate_ir(ir: JsonDict) -> list[str]:
     warnings: list[str] = []
     settings = get_agent_settings()
@@ -905,7 +995,16 @@ def _validate_ir(ir: JsonDict) -> list[str]:
             if not node_ids:
                 warnings.append(f"Flow block {block_id} must contain nodes.")
             for edge in _as_list(block.get("edges")):
-                if edge.get("from") not in node_ids or edge.get("to") not in node_ids:
+                if isinstance(edge, dict):
+                    source = edge.get("from")
+                    target = edge.get("to")
+                elif isinstance(edge, list) and len(edge) >= 2:
+                    source = edge[0]
+                    target = edge[1]
+                else:
+                    warnings.append(f"Flow block {block_id} has invalid edge refs.")
+                    continue
+                if source not in node_ids or target not in node_ids:
                     warnings.append(f"Flow block {block_id} has invalid edge refs.")
         if kind == "table" and (
             not isinstance(block.get("columns"), list)
@@ -916,6 +1015,8 @@ def _validate_ir(ir: JsonDict) -> list[str]:
             warnings.append(f"Metrics block {block_id} must contain items.")
         if kind == "cards" and not isinstance(block.get("cards"), list):
             warnings.append(f"Cards block {block_id} must contain cards.")
+        if kind == "timeline" and not isinstance(block.get("events"), list):
+            warnings.append(f"Timeline block {block_id} must contain events.")
     return _dedupe(warnings)
 
 
@@ -1181,5 +1282,6 @@ __all__ = [
     "demo_update_task_summary",
     "demo_update_topic_summary",
     "generate_artifact_ir_patch",
+    "generate_ir_from_task_context",
     "update_structuring_summary",
 ]
