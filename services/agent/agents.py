@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime
 from typing import Any, Literal, TypedDict
 
@@ -54,6 +55,9 @@ class TopicSummaryState(TypedDict, total=False):
     evidence_candidates: list[JsonDict]
     open_questions: list[str]
     model_mode: ModelMode
+    llm_elapsed_ms: float
+    llm_model: str
+    llm_provider: str
 
 
 class TaskHypothesisState(TypedDict, total=False):
@@ -71,6 +75,9 @@ class TaskHypothesisState(TypedDict, total=False):
     status: str
     confidence: float
     model_mode: ModelMode
+    llm_elapsed_ms: float
+    llm_model: str
+    llm_provider: str
 
 
 class ArtifactIRState(TypedDict, total=False):
@@ -85,6 +92,9 @@ class ArtifactIRState(TypedDict, total=False):
     source_trace: list[JsonDict]
     warnings: list[str]
     model_mode: ModelMode
+    llm_elapsed_ms: float
+    llm_model: str
+    llm_provider: str
 
 
 _CHECKPOINTER = InMemorySaver()
@@ -100,6 +110,7 @@ def update_structuring_summary(payload: dict) -> dict:
     `task_summary`. This function never updates both surfaces in one call.
     Errors are returned as structured JSON objects.
     """
+    started_at = time.perf_counter()
     try:
         update_type = payload.get("update_type")
         body = _as_dict(payload.get("payload"))
@@ -119,9 +130,11 @@ def update_structuring_summary(payload: dict) -> dict:
                 "language": language,
             }
             thread_id = f"{task_id}:topic:{topic_id}:summary"
+            graph_started_at = time.perf_counter()
             result = _get_topic_graph().invoke(
                 state, config={"configurable": {"thread_id": thread_id}}
             )
+            graph_elapsed_ms = _elapsed_ms(graph_started_at)
             result = {
                 "update_type": "topic_summary",
                 "topic_update": {
@@ -135,9 +148,14 @@ def update_structuring_summary(payload: dict) -> dict:
                 "debug": {
                     "used_graphs": ["topic_summary_graph"],
                     "model_mode": result.get("model_mode") or "mock",
+                    "model": result.get("llm_model"),
+                    "provider": result.get("llm_provider"),
+                    "llm_elapsed_ms": result.get("llm_elapsed_ms"),
+                    "llm_fallback_reason": result.get("llm_fallback_reason"),
+                    "graph_elapsed_ms": graph_elapsed_ms,
                 },
             }
-            return _persist_and_return("topic_summary", result)
+            return _persist_and_return("topic_summary", result, started_at)
 
         if update_type == "task_summary":
             task = _as_dict(body.get("task"))
@@ -152,9 +170,11 @@ def update_structuring_summary(payload: dict) -> dict:
         "language": language,
             }
             thread_id = f"{task_id}:task_summary"
+            graph_started_at = time.perf_counter()
             result = _get_task_graph().invoke(
                 state, config={"configurable": {"thread_id": thread_id}}
             )
+            graph_elapsed_ms = _elapsed_ms(graph_started_at)
             result = {
                 "update_type": "task_summary",
                 "task_update": {
@@ -170,9 +190,14 @@ def update_structuring_summary(payload: dict) -> dict:
                 "debug": {
                     "used_graphs": ["task_hypothesis_graph"],
                     "model_mode": result.get("model_mode") or "mock",
+                    "model": result.get("llm_model"),
+                    "provider": result.get("llm_provider"),
+                    "llm_elapsed_ms": result.get("llm_elapsed_ms"),
+                    "llm_fallback_reason": result.get("llm_fallback_reason"),
+                    "graph_elapsed_ms": graph_elapsed_ms,
                 },
             }
-            return _persist_and_return("task_summary", result)
+            return _persist_and_return("task_summary", result, started_at)
 
         return _persist_and_return(
             "summary_error",
@@ -180,10 +205,11 @@ def update_structuring_summary(payload: dict) -> dict:
             "INVALID_UPDATE_TYPE",
             "update_type must be one of: topic_summary, task_summary",
             ),
+            started_at,
         )
     except Exception as exc:
         return _persist_and_return(
-            "summary_error", _error("AGENT_SUMMARY_FAILED", str(exc))
+            "summary_error", _error("AGENT_SUMMARY_FAILED", str(exc)), started_at
         )
 
 
@@ -193,6 +219,7 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
     The function only emits IR schemaVersion 0.2.0 structures. It does not call
     Feishu APIs and does not generate docx, pptx, or Adapter-specific output.
     """
+    started_at = time.perf_counter()
     try:
         target_artifact = str(payload.get("target_artifact") or "").strip()
         if target_artifact not in ALLOWED_ARTIFACTS:
@@ -202,6 +229,7 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
                 "INVALID_TARGET_ARTIFACT",
                 "target_artifact must be one of: doc, canvas, deck",
                 ),
+                started_at,
             )
 
         state: ArtifactIRState = {
@@ -214,7 +242,9 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
             else None,
             "options": _as_dict(payload.get("options")),
         }
+        graph_started_at = time.perf_counter()
         result = _get_artifact_graph().invoke(state)
+        graph_elapsed_ms = _elapsed_ms(graph_started_at)
         proposed = result.get("proposed_ir_if_no_current_ir") or _build_initial_ir(
             state
         )
@@ -231,11 +261,18 @@ def generate_artifact_ir_patch(payload: dict) -> dict:
             "debug": {
                 "used_graphs": ["artifact_ir_graph"],
                 "model_mode": result.get("model_mode") or "mock",
+                "model": result.get("llm_model"),
+                "provider": result.get("llm_provider"),
+                "llm_elapsed_ms": result.get("llm_elapsed_ms"),
+                "llm_fallback_reason": result.get("llm_fallback_reason"),
+                "graph_elapsed_ms": graph_elapsed_ms,
             },
         }
-        return _persist_and_return("artifact_ir_patch", result)
+        return _persist_and_return("artifact_ir_patch", result, started_at)
     except Exception as exc:
-        return _persist_and_return("ir_error", _error("AGENT_IR_FAILED", str(exc)))
+        return _persist_and_return(
+            "ir_error", _error("AGENT_IR_FAILED", str(exc)), started_at
+        )
 
 
 def build_topic_summary_graph() -> Any:
@@ -266,8 +303,13 @@ def build_artifact_ir_graph() -> Any:
 
 
 def call_llm_json(
-    prompt: str, payload: dict, *, schema_hint: str | None = None
-) -> tuple[dict, ModelMode]:
+    prompt: str,
+    payload: dict,
+    *,
+    schema_hint: str | None = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+) -> tuple[dict, ModelMode, JsonDict]:
     """Call an OpenAI-compatible chat completions endpoint and parse JSON.
 
     This is the provider replacement point. Fill `AGENT_LLM_BASE_URL`,
@@ -277,8 +319,23 @@ def call_llm_json(
     function returns deterministic mock JSON.
     """
     settings = get_agent_settings()
-    if settings.mock_mode or settings.api_key in PLACEHOLDER_KEYS:
-        return _mock_llm_json(prompt, payload), "mock"
+    started_at = time.perf_counter()
+    selected_model = model or settings.model
+    metrics: JsonDict = {
+        "llm_provider": settings.provider,
+        "llm_model": selected_model,
+        "llm_elapsed_ms": 0.0,
+    }
+    if settings.mock_mode:
+        result = _mock_llm_json(prompt, payload)
+        metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
+        metrics["llm_fallback_reason"] = "AGENT_LLM_MOCK_MODE is enabled"
+        return result, "mock", metrics
+    if settings.api_key in PLACEHOLDER_KEYS:
+        result = _mock_llm_json(prompt, payload)
+        metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
+        metrics["llm_fallback_reason"] = "AGENT_LLM_API_KEY is empty or placeholder"
+        return result, "mock", metrics
 
     try:
         url = settings.base_url.rstrip("/") + "/chat/completions"
@@ -303,23 +360,29 @@ def call_llm_json(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": settings.model,
+                    "model": selected_model,
                     "messages": messages,
                     "temperature": 0.2,
                     "response_format": {"type": "json_object"},
+                    **({"max_tokens": max_tokens} if max_tokens else {}),
                 },
             )
             response.raise_for_status()
             raw = response.json()["choices"][0]["message"]["content"]
         parsed = _loads_json_object(raw)
         if parsed is not None:
-            return parsed, "real"
+            metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
+            return parsed, "real", metrics
         repaired = _repair_json_text(raw)
         if repaired is not None:
-            return repaired, "real"
-    except Exception:
-        pass
-    return _mock_llm_json(prompt, payload), "mock"
+            metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
+            return repaired, "real", metrics
+        metrics["llm_fallback_reason"] = "Model response was not valid JSON"
+    except Exception as exc:
+        metrics["llm_fallback_reason"] = f"{type(exc).__name__}: {exc}"
+    result = _mock_llm_json(prompt, payload)
+    metrics["llm_elapsed_ms"] = _elapsed_ms(started_at)
+    return result, "mock", metrics
 
 
 def demo_update_topic_summary() -> dict:
@@ -458,13 +521,16 @@ def demo_generate_ir_patch() -> dict:
 
 
 def _topic_summary_node(state: TopicSummaryState) -> JsonDict:
-    result, mode = call_llm_json(
+    settings = get_agent_settings()
+    result, mode, metrics = call_llm_json(
         TOPIC_SUMMARY_PROMPT,
         dict(state),
         schema_hint=(
             "Return keys: new_summary, summary_patch_reason, open_questions, "
             "evidence_candidates."
         ),
+        model=settings.topic_model,
+        max_tokens=500,
     )
     fallback = _mock_topic_summary(dict(state))
     return {
@@ -476,17 +542,21 @@ def _topic_summary_node(state: TopicSummaryState) -> JsonDict:
             result.get("evidence_candidates"), state.get("new_messages") or []
         ),
         "model_mode": mode,
+        **metrics,
     }
 
 
 def _task_hypothesis_node(state: TaskHypothesisState) -> JsonDict:
-    result, mode = call_llm_json(
+    settings = get_agent_settings()
+    result, mode, metrics = call_llm_json(
         TASK_HYPOTHESIS_PROMPT,
         dict(state),
         schema_hint=(
             "Return keys: new_title, new_summary, goal, deliverables, deadline, "
             "status, confidence."
         ),
+        model=settings.task_model,
+        max_tokens=700,
     )
     fallback = _mock_task_summary(dict(state))
     old_task = _as_dict(state.get("old_task"))
@@ -504,17 +574,20 @@ def _task_hypothesis_node(state: TaskHypothesisState) -> JsonDict:
             result.get("confidence", fallback["confidence"])
         ),
         "model_mode": mode,
+        **metrics,
     }
 
 
 def _artifact_ir_node(state: ArtifactIRState) -> JsonDict:
-    result, mode = call_llm_json(
+    settings = get_agent_settings()
+    result, mode, metrics = call_llm_json(
         ARTIFACT_IR_PROMPT,
         dict(state),
         schema_hint=(
             "Return keys: patch, proposed_ir_if_no_current_ir, source_trace, "
             "warnings. IR schemaVersion must be 0.2.0."
         ),
+        model=settings.ir_model,
     )
     fallback = _mock_artifact_ir(dict(state))
     proposed = result.get("proposed_ir_if_no_current_ir")
@@ -530,6 +603,7 @@ def _artifact_ir_node(state: ArtifactIRState) -> JsonDict:
         or fallback["source_trace"],
         "warnings": _as_list(result.get("warnings")),
         "model_mode": mode,
+        **metrics,
     }
 
 
@@ -1037,6 +1111,10 @@ def _clamp_confidence(value: Any) -> float:
     return max(0.0, min(1.0, round(number, 2)))
 
 
+def _elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 2)
+
+
 def _safe_id(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", value.strip())
     return safe.strip("_") or "block"
@@ -1053,24 +1131,38 @@ def _dedupe(items: list[Any]) -> list[Any]:
     return output
 
 
-def _persist_and_return(kind: str, result: JsonDict) -> JsonDict:
-    path = _persist_output(kind, result)
-    if path and isinstance(result.get("debug"), dict):
+def _persist_and_return(
+    kind: str, result: JsonDict, started_at: float | None = None
+) -> JsonDict:
+    if started_at is not None:
+        elapsed_ms = _elapsed_ms(started_at)
+        if isinstance(result.get("debug"), dict):
+            result["debug"]["elapsed_ms"] = elapsed_ms
+        elif isinstance(result.get("error"), dict):
+            result["debug"] = {"elapsed_ms": elapsed_ms}
+    path, persist_elapsed_ms = _persist_output(kind, result)
+    if isinstance(result.get("debug"), dict):
+        result["debug"]["persist_elapsed_ms"] = persist_elapsed_ms
         result["debug"]["output_file"] = str(path)
+        path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
     return result
 
 
-def _persist_output(kind: str, result: JsonDict) -> str:
+def _persist_output(kind: str, result: JsonDict) -> tuple[Any, float]:
     settings = get_agent_settings()
     output_dir = settings.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     path = output_dir / f"{timestamp}_{_safe_id(kind)}.json"
+    started_at = time.perf_counter()
     path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return str(path)
+    return path, _elapsed_ms(started_at)
 
 
 def _error(code: str, message: str, details: JsonDict | None = None) -> JsonDict:

@@ -11,6 +11,9 @@ AGENT_LLM_PROVIDER = "deepseek"
 AGENT_LLM_BASE_URL = "https://api.deepseek.com"
 AGENT_LLM_API_KEY = "YOUR_API_KEY_HERE"
 AGENT_LLM_MODEL = "deepseek-v4-pro"
+AGENT_TOPIC_LLM_MODEL = "deepseek-v4-flash"
+AGENT_TASK_LLM_MODEL = "deepseek-v4-pro"
+AGENT_IR_LLM_MODEL = "deepseek-v4-pro"
 AGENT_LLM_MOCK_MODE = False
 AGENT_IR_SCHEMA_VERSION = "0.2.0"
 AGENT_OUTPUT_DIR = "services/agent/output"
@@ -24,6 +27,9 @@ class AgentSettings:
     base_url: str
     api_key: str
     model: str
+    topic_model: str
+    task_model: str
+    ir_model: str
     mock_mode: bool
     ir_schema_version: str
     output_dir: Path
@@ -39,6 +45,9 @@ def get_agent_settings() -> AgentSettings:
         base_url=_env_value(env, "AGENT_LLM_BASE_URL", AGENT_LLM_BASE_URL),
         api_key=_env_value(env, "AGENT_LLM_API_KEY", AGENT_LLM_API_KEY),
         model=_env_value(env, "AGENT_LLM_MODEL", AGENT_LLM_MODEL),
+        topic_model=_env_value(env, "AGENT_TOPIC_LLM_MODEL", AGENT_TOPIC_LLM_MODEL),
+        task_model=_env_value(env, "AGENT_TASK_LLM_MODEL", AGENT_TASK_LLM_MODEL),
+        ir_model=_env_value(env, "AGENT_IR_LLM_MODEL", AGENT_IR_LLM_MODEL),
         mock_mode=_env_bool(env, "AGENT_LLM_MOCK_MODE", AGENT_LLM_MOCK_MODE),
         ir_schema_version=AGENT_IR_SCHEMA_VERSION,
         output_dir=_resolve_output_dir(_env_value(env, "AGENT_OUTPUT_DIR", AGENT_OUTPUT_DIR)),
@@ -120,6 +129,9 @@ __all__ = [
     "AGENT_LLM_MODEL",
     "AGENT_LLM_PROVIDER",
     "AGENT_OUTPUT_DIR",
+    "AGENT_IR_LLM_MODEL",
+    "AGENT_TASK_LLM_MODEL",
+    "AGENT_TOPIC_LLM_MODEL",
     "AgentSettings",
     "clear_agent_settings_cache",
     "get_agent_settings",
