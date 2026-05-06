@@ -1,0 +1,19 @@
+# Multi-agent registry example. Copy this file to agents.yaml and configure it.
+# In services/gateway/gateway.yaml, set:
+# agents_registry_path: ../agent/agents.yaml
+# Each agent service must implement POST {base_url}/v1/invoke.
+# Per-agent m2m_token is optional; when omitted, gateway.yaml agents_m2m_token is used.
+
+agents:
+  summary:
+    base_url: https://summary-agents.example.com
+  whiteboard:
+    base_url: https://whiteboard-agents.example.com
+    # m2m_token: optional-per-agent-secret
+  slides:
+    base_url: https://slides-agents.example.com
+
+routing:
+  summary_from_chat: summary
+  deliver_whiteboard: whiteboard
+  deliver_slides: slides

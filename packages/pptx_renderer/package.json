@@ -1,0 +1,12 @@
+{
+  "name": "im-office-pptx-renderer",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "render": "node render-deck.mjs"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}
