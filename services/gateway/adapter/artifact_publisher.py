@@ -53,8 +53,6 @@ def publish_ir(
             else:
                 publish_result["doc"] = publish_ir_to_feishu_doc(normalized, target_options)
         elif target == "board":
-            if not dry_run:
-                warnings.append("Board real publishing is TODO in PlanB; adapter may use existing lark-cli path.")
             publish_result["board"] = publish_ir_to_feishu_board(normalized, target_options)
         elif target == "ppt":
             if not dry_run:

@@ -98,6 +98,9 @@ Rules:
   such as decision points, key actions, risks, milestones, or recommendations;
   use summary, flow, table, timeline, or cards.
 - Do not use the same layout for 3 consecutive slides.
+- If several structured sections are needed back-to-back, alternate table with
+  summary, cards, timeline, or flow. Merge small tables when possible instead
+  of producing 3 consecutive table slides.
 - Produce 8 to 10 slides when enough content exists. Never produce more than
   10 slides.
 - Choose a theme palette from the business content. For example, operational
@@ -174,6 +177,11 @@ Rules:
 - Use only supported section kinds:
   overview, flow, cards, metrics, table, timeline, summary.
 - Include only fields consumed by each kind. Do not output unknown fields.
+- Each section must contain the minimum renderable field for its kind:
+  overview/cards/summary use non-empty items; flow uses non-empty nodes and
+  edges; metrics uses non-empty metrics; table uses non-empty columns and rows;
+  timeline uses non-empty events. Use "待确认" only when the source lacks a
+  specific detail.
 - Keep section text concise and scannable.
 """
 
@@ -844,6 +852,8 @@ def generate_slide_draft_from_content_ir(content_ir: dict, options: dict | None 
 
     slide_draft = _extract_named_object(llm_result.get("data") or {}, "slide_draft")
     slide_draft = _ensure_slide_draft_defaults(slide_draft, payload["content_ir"])
+    repair_warnings = _repair_slide_draft(slide_draft)
+    warnings.extend(repair_warnings)
     validation = _validate_slide_draft(slide_draft)
     if validation:
         return _finish(
@@ -882,6 +892,8 @@ def generate_board_ir_from_content_ir(content_ir: dict, options: dict | None = N
     board_ir = _extract_named_object(llm_result.get("data") or {}, "board_ir")
     board_ir = _ensure_board_ir_defaults(board_ir, payload["content_ir"])
     board_ir = _normalize_board_ir(board_ir)
+    repair_warnings = _repair_board_ir(board_ir, payload["content_ir"])
+    warnings.extend(repair_warnings)
     validation = _validate_board_ir(board_ir)
     if validation:
         return _finish(
@@ -1568,15 +1580,291 @@ def _normalize_board_ir(board_ir: JsonDict) -> JsonDict:
             clean["columns"] = _string_list_from_any(section.get("columns"))
             clean["rows"] = _normalize_table_rows(section.get("rows"), len(clean["columns"]))
         elif kind == "timeline":
-            clean["events"] = _event_list_from_any(section.get("events") or section.get("items"))
+            clean["events"] = _board_event_list_from_any(section.get("events") or section.get("items"))
         normalized_sections.append(clean)
     out["sections"] = normalized_sections
     return out
 
 
+def _repair_board_ir(board_ir: JsonDict, content_ir: JsonDict | None = None) -> list[str]:
+    warnings: list[str] = []
+    content = content_ir if isinstance(content_ir, dict) else {}
+    sections = board_ir.get("sections")
+    if not isinstance(sections, list):
+        return warnings
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            continue
+        kind = str(section.get("kind") or "overview")
+        before = _board_section_is_renderable(section)
+        if kind in {"overview", "cards", "summary"} and not section.get("items"):
+            section["items"] = _board_fallback_items(section, content)
+        elif kind == "flow":
+            if not section.get("nodes"):
+                labels = _board_fallback_items(section, content, limit=4)
+                section["nodes"] = [{"id": f"n{node_index + 1}", "label": label} for node_index, label in enumerate(labels)]
+            if not section.get("edges"):
+                section["edges"] = _linear_edges_for_nodes(section.get("nodes") or [])
+        elif kind == "metrics" and not section.get("metrics"):
+            metrics = _metric_list_from_any(content.get("metrics"))
+            section["metrics"] = metrics or [{"label": str(section.get("title") or "指标"), "value": "待确认", "note": _board_first_fallback_line(section, content)}]
+        elif kind == "table":
+            if not section.get("columns"):
+                section["columns"] = ["事项", "说明"]
+            if not section.get("rows"):
+                section["rows"] = [[line, "待确认"] for line in _board_fallback_items(section, content, limit=4)]
+            section["rows"] = _normalize_table_rows(section.get("rows"), len(section.get("columns") or []))
+        elif kind == "timeline" and not section.get("events"):
+            events = _board_event_list_from_any(content.get("implementation_plan"))
+            section["events"] = events or [{"date": "近期", "title": str(section.get("title") or "事项"), "body": _board_first_fallback_line(section, content)}]
+        if not before and _board_section_is_renderable(section):
+            warnings.append(f"Repaired board sections[{index}] {kind} content with deterministic fallback items.")
+    return warnings
+
+
+def _board_section_is_renderable(section: JsonDict) -> bool:
+    kind = str(section.get("kind") or "")
+    if kind in {"overview", "cards", "summary"}:
+        return bool(section.get("items"))
+    if kind == "flow":
+        return bool(section.get("nodes")) and bool(section.get("edges"))
+    if kind == "metrics":
+        return bool(section.get("metrics"))
+    if kind == "table":
+        return bool(section.get("columns")) and bool(section.get("rows"))
+    if kind == "timeline":
+        return bool(section.get("events"))
+    return False
+
+
+def _board_fallback_items(section: JsonDict, content_ir: JsonDict, limit: int = 5) -> list[str]:
+    candidates: list[str] = []
+    for value in (section.get("description"), section.get("title")):
+        text = str(value or "").strip()
+        if text:
+            candidates.append(text)
+    kind = str(section.get("kind") or "")
+    title = str(section.get("title") or "").lower()
+    if kind == "overview" or "背景" in title or "概览" in title or "overview" in title:
+        candidates.extend(_string_list_from_any(content_ir.get("background") or content_ir.get("subtitle")))
+    if kind in {"cards", "summary"}:
+        candidates.extend(_cards_to_lines(content_ir.get("problems")))
+        candidates.extend(_cards_to_lines(content_ir.get("solution_modules")))
+        candidates.extend(_string_list_from_any(content_ir.get("expected_outcomes")))
+        candidates.extend(_string_list_from_any(content_ir.get("decision_points")))
+    if kind == "flow":
+        candidates.extend(_cards_to_lines(content_ir.get("process")))
+        candidates.extend(_cards_to_lines(content_ir.get("solution_modules")))
+    if kind == "table":
+        candidates.extend(_cards_to_lines(content_ir.get("risks")))
+        candidates.extend(_string_list_from_any(content_ir.get("decision_points")))
+    if kind == "timeline":
+        candidates.extend(_events_to_lines(content_ir.get("implementation_plan")))
+    clean = [line for line in (str(item or "").strip() for item in candidates) if line]
+    return clean[:limit] or ["待确认"]
+
+
+def _board_first_fallback_line(section: JsonDict, content_ir: JsonDict) -> str:
+    return _board_fallback_items(section, content_ir, limit=1)[0]
+
+
+def _cards_to_lines(value: Any) -> list[str]:
+    lines: list[str] = []
+    for item in _card_list_from_any(value):
+        title = str(item.get("title") or "").strip()
+        body = str(item.get("body") or item.get("description") or "").strip()
+        if title and body:
+            lines.append(f"{title}: {body}")
+        elif title or body:
+            lines.append(title or body)
+    return lines
+
+
+def _events_to_lines(value: Any) -> list[str]:
+    lines: list[str] = []
+    for item in _board_event_list_from_any(value):
+        date_text = str(item.get("date") or "").strip()
+        title = str(item.get("title") or "").strip()
+        body = str(item.get("body") or item.get("description") or "").strip()
+        line = " ".join(part for part in (date_text, title) if part)
+        if body:
+            line = f"{line}: {body}" if line else body
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _board_event_list_from_any(value: Any) -> list[JsonDict]:
+    output = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, dict):
+            output.append(
+                {
+                    "date": str(item.get("date") or item.get("time") or item.get("phase") or ""),
+                    "title": str(item.get("title") or item.get("label") or item.get("name") or ""),
+                    "body": str(item.get("body") or item.get("description") or item.get("text") or item.get("note") or ""),
+                }
+            )
+        elif str(item).strip():
+            output.append({"date": "", "title": str(item).strip(), "body": ""})
+    return [item for item in output if item["date"] or item["title"] or item["body"]]
+
+
+def repair_board_ir(board_ir: JsonDict, content_ir: JsonDict | None = None) -> tuple[JsonDict, list[str]]:
+    repaired = _ensure_board_ir_defaults(board_ir if isinstance(board_ir, dict) else {}, content_ir or {})
+    repaired = _normalize_board_ir(repaired)
+    warnings = _repair_board_ir(repaired, content_ir or {})
+    return repaired, warnings
+
+
 def _canonical_slide_layout(layout: str) -> str:
     value = str(layout or "").strip()
     return SLIDE_LAYOUT_ALIASES.get(value, value)
+
+
+def _repair_slide_draft(slide_draft: JsonDict) -> list[str]:
+    warnings: list[str] = []
+    slides = slide_draft.get("slides")
+    if not isinstance(slides, list):
+        return warnings
+    layouts: list[str] = []
+    for index, slide in enumerate(slides):
+        if not isinstance(slide, dict):
+            layouts.append("")
+            continue
+        layout = _canonical_slide_layout(str(slide.get("layout") or "summary"))
+        slide["layout"] = layout
+        if len(layouts) >= 2 and layout and layouts[-1] == layouts[-2] == layout:
+            original = layout
+            _repair_repeated_slide_layout(slide, index)
+            layout = str(slide.get("layout") or "summary")
+            warnings.append(f"Repaired slides[{index}] layout from {original} to {layout} to avoid 3 consecutive {original} slides.")
+        if isinstance(slide.get("content"), dict):
+            slide["content"] = _normalize_slide_content(str(slide.get("layout") or ""), slide["content"])
+        layouts.append(str(slide.get("layout") or ""))
+    return warnings
+
+
+def _repair_repeated_slide_layout(slide: JsonDict, index: int) -> None:
+    layout = str(slide.get("layout") or "")
+    content = _as_dict(slide.get("content"))
+    if layout == "table":
+        replacement = _table_slide_replacement(content)
+    elif layout == "timeline":
+        replacement = ("summary", _summary_content_from_events(content.get("events")))
+    elif layout in {"cards", "flow"}:
+        key = "cards" if layout == "cards" else "steps"
+        replacement = ("summary", _summary_content_from_cards(content.get(key)))
+    elif layout == "metrics":
+        replacement = ("summary", _summary_content_from_metrics(content.get("metrics")))
+    else:
+        replacement = ("summary", _summary_content_from_any(content))
+    slide["layout"] = replacement[0]
+    slide["content"] = replacement[1]
+    if not str(slide.get("id") or "").strip():
+        slide["id"] = f"slide_{index + 1}"
+
+
+def _table_slide_replacement(content: JsonDict) -> tuple[str, JsonDict]:
+    columns = _string_list_from_any(content.get("columns"))
+    rows = _normalize_table_rows(content.get("rows"), len(columns)) if columns else _rows_from_any(content.get("rows"))
+    if _table_rows_look_like_timeline(columns, rows):
+        return "timeline", {"events": _events_from_table_rows(columns, rows)}
+    if 0 < len(rows) <= 4 and len(columns) <= 3 and _max_nested_text_len(rows) <= 36:
+        return "cards", {"cards": _cards_from_table_rows(columns, rows)}
+    return "summary", _summary_content_from_table(columns, rows)
+
+
+def _table_rows_look_like_timeline(columns: list[str], rows: list[list[str]]) -> bool:
+    labels = " ".join(columns).lower()
+    if any(token in labels for token in ("时间", "日期", "阶段", "排期", "周期", "date", "time", "phase", "week")):
+        return True
+    first_values = " ".join(row[0] for row in rows if row)
+    return bool(re.search(r"(第[一二三四五六七八九十\d]+阶段|\d+\s*[-~至]\s*\d+\s*周|周|月|q[1-4]|近期|现在)", first_values, flags=re.I))
+
+
+def _events_from_table_rows(columns: list[str], rows: list[list[str]]) -> list[JsonDict]:
+    events: list[JsonDict] = []
+    for row in rows[:5]:
+        values = [str(cell or "").strip() for cell in row]
+        if not any(values):
+            continue
+        date = values[0] if values else "近期"
+        title = values[1] if len(values) > 1 and values[1] else date
+        body_values = values[2:] if len(values) > 2 else values[1:]
+        body = "；".join(_label_value_pairs(columns[2:], body_values)) or (values[-1] if len(values) > 1 else title)
+        events.append({"date": date or "近期", "title": title or "事项", "body": body or "待确认"})
+    return events or [{"date": "近期", "title": "排期", "body": "待确认"}]
+
+
+def _cards_from_table_rows(columns: list[str], rows: list[list[str]]) -> list[JsonDict]:
+    cards: list[JsonDict] = []
+    for row in rows[:4]:
+        values = [str(cell or "").strip() for cell in row]
+        if not any(values):
+            continue
+        title = values[0] or "事项"
+        body = "；".join(_label_value_pairs(columns[1:], values[1:])) or "待确认"
+        cards.append({"title": title, "body": body})
+    return cards or [{"title": "事项", "body": "待确认"}]
+
+
+def _summary_content_from_table(columns: list[str], rows: list[list[str]]) -> JsonDict:
+    lines = []
+    for row in rows:
+        values = [str(cell or "").strip() for cell in row]
+        if any(values):
+            lines.append("；".join(_label_value_pairs(columns, values)) or "；".join(values))
+    return _split_summary_lines(lines)
+
+
+def _summary_content_from_cards(value: Any) -> JsonDict:
+    cards = _slide_card_list_from_any(value)
+    return _split_summary_lines([f"{card.get('title')}: {card.get('body')}" for card in cards])
+
+
+def _summary_content_from_metrics(value: Any) -> JsonDict:
+    metrics = _metric_list_from_any(value)
+    return _split_summary_lines([f"{item.get('label')}: {item.get('value')} {item.get('note')}".strip() for item in metrics])
+
+
+def _summary_content_from_events(value: Any) -> JsonDict:
+    events = _event_list_from_any(value)
+    return _split_summary_lines([f"{event.get('date')} {event.get('title')}: {event.get('body')}" for event in events])
+
+
+def _summary_content_from_any(content: JsonDict) -> JsonDict:
+    lines: list[str] = []
+    for value in content.values():
+        lines.extend(_string_list_from_any(value))
+    return _split_summary_lines(lines)
+
+
+def _split_summary_lines(lines: list[str]) -> JsonDict:
+    clean = [line for line in (str(item or "").strip() for item in lines) if line]
+    if not clean:
+        clean = ["待确认"]
+    midpoint = max(1, (len(clean) + 1) // 2)
+    return {"outcomes": clean[:midpoint], "next_steps": clean[midpoint:] or clean[:1]}
+
+
+def _label_value_pairs(labels: list[str], values: list[str]) -> list[str]:
+    pairs: list[str] = []
+    for index, value in enumerate(values):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        label = str(labels[index] if index < len(labels) else "").strip()
+        pairs.append(f"{label}: {text}" if label else text)
+    return pairs
+
+
+def _max_nested_text_len(rows: list[list[str]]) -> int:
+    maximum = 0
+    for row in rows:
+        for cell in row:
+            maximum = max(maximum, len(str(cell or "")))
+    return maximum
 
 
 def _validate_ir(ir: JsonDict) -> list[str]:
@@ -1747,6 +2035,12 @@ def _validate_slide_draft(slide_draft: JsonDict) -> list[str]:
 
 def validate_slide_draft(slide_draft: JsonDict) -> list[str]:
     return _validate_slide_draft(slide_draft)
+
+
+def repair_slide_draft(slide_draft: JsonDict) -> tuple[JsonDict, list[str]]:
+    repaired = json.loads(json.dumps(slide_draft if isinstance(slide_draft, dict) else {}, ensure_ascii=False))
+    warnings = _repair_slide_draft(repaired)
+    return repaired, warnings
 
 
 def _validate_board_ir(board_ir: JsonDict) -> list[str]:
@@ -2203,6 +2497,8 @@ __all__ = [
     "generate_content_ir_from_messages",
     "generate_ir_from_messages",
     "generate_slide_draft_from_content_ir",
+    "repair_board_ir",
+    "repair_slide_draft",
     "validate_board_ir",
     "validate_slide_draft",
 ]

@@ -20,6 +20,10 @@ DEFAULT_USER_SCOPES = (
     "docx:document:readonly",
     "docx:document:create",
     "docx:document:write_only",
+    "board:whiteboard:node:read",
+    "board:whiteboard:node:create",
+    "board:whiteboard:node:update",
+    "board:whiteboard:node:delete",
     "drive:file:upload",
     "space:document:retrieve",
 )
@@ -107,6 +111,22 @@ def get_valid_user_access_token(settings: Settings, user_id: str) -> str:
     expected = str(record.get("primary_user_id") or uid)
     save_user_token(settings, refreshed, expected_user_id=expected)
     return str(refreshed.get("access_token") or refreshed.get("user_access_token") or "").strip()
+
+
+def get_any_valid_user_access_token(settings: Settings) -> tuple[str, str]:
+    store = _read_store(settings)
+    users = store.get("users") if isinstance(store.get("users"), dict) else {}
+    primary_ids = _dedupe(
+        [
+            str(record.get("primary_user_id") or alias).strip()
+            for alias, record in users.items()
+            if isinstance(record, dict)
+        ]
+    )
+    if len(primary_ids) != 1:
+        return ("", "")
+    user_id = primary_ids[0]
+    return (user_id, get_valid_user_access_token(settings, user_id))
 
 
 def _refresh_user_token(settings: Settings, refresh_token: str) -> dict[str, Any]:
@@ -242,6 +262,7 @@ __all__ = [
     "build_oauth_login_url",
     "decode_oauth_state",
     "encode_oauth_state",
+    "get_any_valid_user_access_token",
     "get_valid_user_access_token",
     "save_user_token",
 ]

@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from services.agent.agents import validate_slide_draft
+from services.agent.agents import repair_slide_draft, validate_slide_draft
 
 from .ir_schema import ensure_ir_defaults, validate_ir
 from .runtime import adapter_error, env_value, extract_folder_token, lark_cli_path, parse_json_object
@@ -54,6 +54,8 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
             [],
             warnings,
         )
+    slide_draft, repair_warnings = repair_slide_draft(slide_draft)
+    warnings.extend(repair_warnings)
     slide_errors = validate_slide_draft(slide_draft)
     if slide_errors:
         return adapter_error("SLIDE_DRAFT_VALIDATION_FAILED", "SlideDraft validation failed", slide_errors, warnings)

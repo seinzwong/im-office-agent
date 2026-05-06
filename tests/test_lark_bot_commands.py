@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,12 +22,13 @@ from services.gateway.adapter.feishu_doc_adapter import (
     ir_to_feishu_doc_blocks,
 )
 from services.gateway.adapter.feishu_board_adapter import ir_to_feishu_board_draft
+from services.gateway.adapter.feishu_board_adapter import board_ir_to_whiteboard_dsl
 from services.gateway.adapter.feishu_board_adapter import publish_ir_to_feishu_board
 from services.gateway.adapter.ir_schema import ensure_ir_defaults, validate_ir
 from services.gateway.adapter.ppt_adapter import publish_ir_to_ppt, slide_draft_to_ppt_draft
 from services.gateway.app import content_ir_store
 from services.gateway import planb_e2e
-from services.agent.agents import validate_slide_draft
+from services.agent.agents import repair_board_ir, repair_slide_draft, validate_board_ir, validate_slide_draft
 
 
 def _client() -> TestClient:
@@ -405,6 +407,28 @@ class PptSchemaAndAdapterTests(unittest.TestCase):
         self.assertIn("slides[0].content.steps is not supported for layout cards.", errors)
         self.assertIn("slides[0].content does not match layout schema for cards.", errors)
 
+    def test_slide_draft_repair_breaks_three_consecutive_tables(self) -> None:
+        draft = _slide_draft()
+        table_slide = {
+            "id": "table",
+            "title": "Table",
+            "layout": "table",
+            "content": {"columns": ["事项", "负责人"], "rows": [["确认范围", "Alice"]]},
+            "visual": {"highlightIndex": -1},
+            "speaker_notes": "",
+        }
+        draft["slides"] = [
+            {**table_slide, "id": "table_1"},
+            {**table_slide, "id": "table_2"},
+            {**table_slide, "id": "table_3"},
+        ]
+
+        repaired, warnings = repair_slide_draft(draft)
+
+        self.assertEqual([slide["layout"] for slide in repaired["slides"]], ["table", "table", "cards"])
+        self.assertTrue(any("avoid 3 consecutive table" in warning for warning in warnings))
+        self.assertEqual(validate_slide_draft(repaired), [])
+
     def test_ppt_adapter_rejects_xml_renderer_and_does_not_fallback(self) -> None:
         result = publish_ir_to_ppt(_ir(), {"slide_draft": _slide_draft(), "renderer": "xml", "dry_run": True})
         self.assertFalse(result["ok"])
@@ -483,6 +507,183 @@ class PptSchemaAndAdapterTests(unittest.TestCase):
             result = planb_e2e.run_planb_e2e(request)
         self.assertTrue(result["ok"])
         generate_board.assert_not_called()
+
+    def test_board_ir_repair_fills_empty_items_sections(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [
+                {"id": "s1", "kind": "overview", "title": "Overview", "description": "Context", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []},
+                {"id": "s2", "kind": "cards", "title": "Actions", "description": "", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []},
+                {"id": "s3", "kind": "summary", "title": "Next", "description": "", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []},
+            ],
+        }
+        content_ir = {
+            "background": "Current onboarding is slow.",
+            "solution_modules": [{"title": "Checklist", "description": "Create a 7-day checklist"}],
+            "expected_outcomes": ["Reduce onboarding to one day"],
+        }
+
+        repaired, warnings = repair_board_ir(board_ir, content_ir)
+
+        self.assertEqual(validate_board_ir(repaired), [])
+        self.assertTrue(all(section["items"] for section in repaired["sections"]))
+        self.assertTrue(any("Repaired board sections[0]" in warning for warning in warnings))
+
+    def test_board_adapter_repairs_empty_items_sections(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [{"id": "s1", "kind": "overview", "title": "Overview", "description": "Context", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []}],
+        }
+
+        result = publish_ir_to_feishu_board(_ir(), {"dry_run": True, "board_ir": board_ir})
+
+        self.assertTrue(result["ok"])
+        self.assertIn("Context", result.get("whiteboard_dsl") or "")
+        self.assertTrue(result["warnings"])
+
+    def test_board_adapter_create_uses_openapi_board_token(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [{"id": "s1", "kind": "overview", "title": "Overview", "description": "", "accent": "", "items": ["Context"], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []}],
+        }
+        posts = []
+
+        def fake_post(url: str, **kwargs):
+            posts.append({"url": url, "json": kwargs.get("json")})
+            if url.endswith("/docx/v1/documents"):
+                return _FakeResponse({"code": 0, "data": {"document": {"document_id": "doc_token"}}})
+            if url.endswith("/children"):
+                return _FakeResponse({"code": 0, "data": {"children": [{"board": {"token": "board_token"}}]}})
+            if "/open-apis/board/v1/whiteboards/board_token/nodes" in url:
+                return _FakeResponse({"code": 0, "data": {"nodes": []}})
+            return _FakeResponse({"code": 999, "msg": "unexpected"}, status_code=400)
+
+        def fake_get(url: str, **kwargs):
+            if url.endswith("/blocks"):
+                return _FakeResponse({"code": 0, "data": {"items": [{"block_id": "page", "block_type": 1}]}})
+            return _FakeResponse({"code": 999, "msg": "unexpected"}, status_code=400)
+
+        with patch("services.gateway.adapter.feishu_board_adapter.httpx.post", side_effect=fake_post), patch(
+            "services.gateway.adapter.feishu_board_adapter.httpx.get", side_effect=fake_get
+        ):
+            result = publish_ir_to_feishu_board(
+                _ir(),
+                {"dry_run": False, "folder_token": "folder", "board_ir": board_ir, "user_access_token": "user-token"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["document_id"], "doc_token")
+        self.assertEqual(result["whiteboard_token"], "board_token")
+        self.assertNotIn("WHITEBOARD_TOKEN_MISSING", " ".join(result.get("warnings") or []))
+        self.assertEqual(posts[1]["json"]["children"][0]["block_type"], 43)
+        self.assertIn("nodes", posts[2]["json"])
+        self.assertNotIn("plant_uml_code", posts[2]["json"])
+        self.assertTrue(posts[2]["json"]["nodes"])
+        self.assertIn("text", posts[2]["json"]["nodes"][0]["text"])
+        self.assertNotIn("content", posts[2]["json"]["nodes"][0]["text"])
+        self.assertGreaterEqual(len(posts[2]["json"]["nodes"]), 4)
+        background_nodes = [node for node in posts[2]["json"]["nodes"] if str(node.get("id", "")).endswith("_bg")]
+        self.assertTrue(background_nodes)
+        self.assertEqual(background_nodes[0]["style"]["border_color"], "#D8E0EA")
+        self.assertEqual(background_nodes[0]["style"]["border_width"], "extra_narrow")
+        section_text_nodes = [node for node in posts[2]["json"]["nodes"] if str(node.get("id", "")).startswith("s0_")]
+        self.assertGreaterEqual(len(section_text_nodes), 2)
+        self.assertFalse(any("Overview\nContext" == (node.get("text") or {}).get("text") for node in posts[2]["json"]["nodes"]))
+        body_nodes = [node for node in posts[2]["json"]["nodes"] if str(node.get("id", "")).startswith("s0_body_")]
+        self.assertEqual(len(body_nodes), 1)
+        self.assertEqual(body_nodes[0]["width"], 552)
+        self.assertGreaterEqual(body_nodes[0]["height"], 31)
+        title_nodes = [node for node in posts[2]["json"]["nodes"] if str(node.get("id", "")).endswith("_title")]
+        self.assertTrue(title_nodes)
+        self.assertGreaterEqual(title_nodes[0]["height"], 37)
+
+    def test_board_dsl_uses_fixed_readable_layout(self) -> None:
+        long_text = "这是一个很长的中文白板内容，用来确认渲染器会进行换行，而不是把整段内容压缩成一个横向极长的节点导致字几乎看不见。"
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [
+                {"id": "s1", "kind": "overview", "title": "Overview", "description": long_text, "accent": "", "items": [long_text], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []},
+                {"id": "s2", "kind": "table", "title": "Table", "description": "", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": ["模块", "输入", "输出"], "rows": [[long_text, long_text, long_text]], "events": []},
+                {"id": "s3", "kind": "timeline", "title": "Timeline", "description": "", "accent": "", "items": [], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": [{"date": "T0", "title": "Kickoff", "body": long_text}]},
+            ],
+        }
+
+        payload = json.loads(board_ir_to_whiteboard_dsl(board_ir))
+        nodes = payload["nodes"]
+        section_nodes = [node for node in nodes if node.get("type") == "frame"]
+
+        self.assertTrue(section_nodes)
+        for node in section_nodes:
+            self.assertIsInstance(node.get("x"), int)
+            self.assertIsInstance(node.get("y"), int)
+            self.assertIsInstance(node.get("width"), int)
+            self.assertIsInstance(node.get("height"), int)
+            self.assertNotIn("fill-container", json.dumps(node, ensure_ascii=False))
+            self.assertNotIn("fit-content", json.dumps(node, ensure_ascii=False))
+            for child in node.get("children") or []:
+                if child.get("type") == "text":
+                    for line in str(child.get("text") or "").splitlines():
+                        self.assertLessEqual(len(line), 55)
+        overview_body_nodes = [child for child in section_nodes[0].get("children") or [] if str(child.get("id", "")).startswith("s0_body_")]
+        self.assertLessEqual(len(overview_body_nodes), 5)
+        self.assertTrue(any("\n" in str(child.get("text") or "") for child in overview_body_nodes))
+        self.assertTrue(all(child.get("width") == 552 for child in overview_body_nodes))
+        two_line_nodes = [child for child in overview_body_nodes if "\n" in str(child.get("text") or "")]
+        self.assertTrue(all(child.get("height", 0) >= 52 for child in two_line_nodes))
+        desc_nodes = [child for child in section_nodes[0].get("children") or [] if str(child.get("id", "")).endswith("_desc")]
+        self.assertTrue(desc_nodes)
+        self.assertNotEqual(desc_nodes[0].get("height"), 44)
+        title_nodes = [child for child in section_nodes[0].get("children") or [] if str(child.get("id", "")).endswith("_title")]
+        self.assertTrue(title_nodes)
+        self.assertGreaterEqual(title_nodes[0].get("height", 0), 37)
+
+    def test_board_body_keeps_truncated_item_when_space_is_tight(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [
+                {
+                    "id": "s1",
+                    "kind": "overview",
+                    "title": "Overview",
+                    "description": "Long description forces less body room. " * 8,
+                    "accent": "",
+                    "items": [
+                        "First item has enough content to wrap into two visible lines for height testing.",
+                        "Second item should remain as a one-line truncated node when space is tight.",
+                        "Third item may be dropped if there is no remaining space.",
+                    ],
+                    "nodes": [],
+                    "edges": [],
+                    "metrics": [],
+                    "columns": [],
+                    "rows": [],
+                    "events": [],
+                }
+            ],
+        }
+
+        payload = json.loads(board_ir_to_whiteboard_dsl(board_ir))
+        section = next(node for node in payload["nodes"] if node.get("type") == "frame")
+        body_nodes = [child for child in section.get("children") or [] if str(child.get("id", "")).startswith("s0_body_")]
+
+        self.assertTrue(body_nodes)
+        self.assertTrue(any(str(child.get("text") or "").endswith("...") for child in body_nodes))
+        self.assertTrue(all(child.get("height", 0) >= 31 for child in body_nodes))
 
     def test_board_adapter_dry_run_keeps_only_supported_timeline_fields(self) -> None:
         board_ir = {
