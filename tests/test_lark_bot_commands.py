@@ -14,7 +14,12 @@ from services.gateway.app import oauth_tokens
 from services.gateway.app.pipelines import summary_from_event
 from services.gateway.app.routes import lark_events
 from services.gateway.app.routes import api_v1
-from services.gateway.adapter.feishu_doc_adapter import FeishuDocClient
+from services.gateway.adapter.feishu_doc_adapter import (
+    FeishuDocClient,
+    feishu_doc_blocks_to_openapi_children,
+    ir_to_feishu_doc_blocks,
+)
+from services.gateway.adapter.ir_schema import ensure_ir_defaults, validate_ir
 
 
 def _client() -> TestClient:
@@ -223,6 +228,119 @@ class SummaryOAuthFlowTests(unittest.TestCase):
 
 
 class FeishuDocAdapterTests(unittest.TestCase):
+    def test_unified_ir_fields_validate_and_render(self) -> None:
+        ir = ensure_ir_defaults(
+            {
+                "schemaVersion": "0.2.0",
+                "meta": {"title": "t"},
+                "blocks": [
+                    {
+                        "id": "actions",
+                        "kind": "table",
+                        "title": "Action table",
+                        "description": "Owner-aligned next steps.",
+                        "intent": "actions",
+                        "columns": ["Task", "Owner", "Due", "Status"],
+                        "rows": [["Review", "Alice", "Today", "Open"]],
+                        "caption": "Use 待确认 for missing owners.",
+                        "sourceRefs": ["m1 10:00"],
+                    },
+                    {
+                        "id": "cards",
+                        "kind": "cards",
+                        "title": "Decisions",
+                        "intent": "decisions",
+                        "cards": [{"title": "Go", "body": "Ship v1", "meta": ["owner: Bob", "status: confirmed"]}],
+                    },
+                    {
+                        "id": "timeline",
+                        "kind": "timeline",
+                        "title": "Plan",
+                        "events": [{"date": "Today", "title": "Review", "body": "Check scope", "owner": "Alice", "status": "open"}],
+                    },
+                ],
+            }
+        )
+        self.assertEqual(validate_ir(ir), [])
+        doc_blocks = ir_to_feishu_doc_blocks(ir)
+        self.assertIn({"type": "quote", "text": "Owner-aligned next steps."}, doc_blocks)
+        self.assertIn({"type": "quote", "text": "来源：m1 10:00"}, doc_blocks)
+        self.assertTrue(any(block.get("type") == "table" and block.get("rows", [])[0] == ["Task", "Owner", "Due", "Status"] for block in doc_blocks))
+        children = feishu_doc_blocks_to_openapi_children(doc_blocks)
+        table_children = [child for child in children if child.get("block_type") == 31]
+        self.assertEqual(table_children[0]["_table_rows"][1], ["Review", "Alice", "Today", "Open"])
+
+    def test_table_rows_are_normalized_to_columns(self) -> None:
+        ir = ensure_ir_defaults(
+            {
+                "schemaVersion": "0.2.0",
+                "meta": {"title": "t"},
+                "blocks": [
+                    {
+                        "id": "actions",
+                        "kind": "table",
+                        "title": "Action table",
+                        "columns": ["Task", "Owner", "Due"],
+                        "rows": [["Review", "Alice"], ["Ship", "Bob", "Tomorrow", "ignored"]],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(ir["blocks"][0]["rows"], [["Review", "Alice", "待确认"], ["Ship", "Bob", "Tomorrow"]])
+        self.assertEqual(validate_ir(ir), [])
+
+    def test_structured_intents_must_use_table(self) -> None:
+        ir = ensure_ir_defaults(
+            {
+                "schemaVersion": "0.2.0",
+                "meta": {"title": "t"},
+                "blocks": [
+                    {
+                        "id": "actions",
+                        "kind": "cards",
+                        "intent": "actions",
+                        "title": "Actions",
+                        "cards": [{"title": "Review", "body": "Check scope"}],
+                    }
+                ],
+            }
+        )
+        self.assertIn("intent actions must use kind table", "\n".join(validate_ir(ir)))
+
+    def test_card_meta_and_sources_render_concisely(self) -> None:
+        ir = ensure_ir_defaults(
+            {
+                "schemaVersion": "0.2.0",
+                "meta": {"title": "t"},
+                "blocks": [
+                    {
+                        "id": "cards",
+                        "kind": "cards",
+                        "title": "Cards",
+                        "sourceRefs": ["message:om_x100b509affb384a8c44c00f34309780", "https://www.feishu.cn/docx/abc"],
+                        "cards": [
+                            {
+                                "title": "Validate link",
+                                "body": "Confirm access.",
+                                "meta": [
+                                    "owner: 待确认",
+                                    "status: 进行中",
+                                    "link: https://www.feishu.cn/docx/abc",
+                                    "source: message:om_x100b509affb384a8c44c00f34309780",
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        doc_blocks = ir_to_feishu_doc_blocks(ir)
+        text_blocks = [block.get("text") for block in doc_blocks]
+        self.assertIn("status: 进行中", text_blocks)
+        self.assertNotIn("owner: 待确认", text_blocks)
+        self.assertNotIn("link: https://www.feishu.cn/docx/abc", text_blocks)
+        self.assertIn("来源：消息 | 文档链接", text_blocks)
+
     def test_page_block_id_falls_back_when_read_scope_missing(self) -> None:
         client = FeishuDocClient("app", "secret", user_access_token="user-token")
         response = _FakeResponse(
@@ -239,6 +357,30 @@ class FeishuDocAdapterTests(unittest.TestCase):
         )
         with patch("services.gateway.adapter.feishu_doc_adapter.httpx.get", return_value=response):
             self.assertEqual(client.page_block_id("doc_token"), "doc_token")
+
+    def test_table_create_falls_back_to_readable_markdown_when_descendant_fails(self) -> None:
+        client = FeishuDocClient("app", "secret", user_access_token="user-token")
+        table_child = {
+            "block_type": 31,
+            "table": {"property": {"row_size": 2, "column_size": 2}},
+            "_table_rows": [["Task", "Owner"], ["Review", "Alice"]],
+        }
+        posts = []
+
+        def fake_post(url: str, **kwargs):
+            posts.append({"url": url, "json": kwargs.get("json")})
+            if url.endswith("/descendant"):
+                return _FakeResponse({"code": 1, "msg": "unsupported"}, status_code=400)
+            return _FakeResponse({"code": 0, "data": {"ok": True}})
+
+        with patch.object(client, "page_block_id", return_value="page"), patch(
+            "services.gateway.adapter.feishu_doc_adapter.httpx.post",
+            side_effect=fake_post,
+        ):
+            result = client.create_blocks("doc", [table_child])
+
+        self.assertEqual(result["results"][0]["ok"], True)
+        self.assertIn("| Task | Owner |", posts[-1]["json"]["children"][0]["code"]["elements"][0]["text_run"]["content"])
 
 
 def _settings(tmp: str, static_user_token: str = "") -> Settings:

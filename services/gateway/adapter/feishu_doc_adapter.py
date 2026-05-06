@@ -44,8 +44,17 @@ def feishu_doc_blocks_to_openapi_children(blocks: list[dict]) -> list[dict]:
         elif block_type == "code":
             children.append({"block_type": 14, "code": {"elements": [_text_element(text)]}})
         elif block_type == "table":
-            rows = block.get("rows", [])
-            children.append({"block_type": 31, "table": {"property": {"row_size": len(rows), "column_size": _table_width(rows)}}})
+            rows = _normalize_table_rows(block.get("rows", []))
+            if rows:
+                children.append(
+                    {
+                        "block_type": 31,
+                        "table": {"property": {"row_size": len(rows), "column_size": _table_width(rows), "header_row": True}},
+                        "_table_rows": rows,
+                    }
+                )
+            elif block.get("caption"):
+                children.append(_text_block(2, "text", str(block.get("caption") or "")))
         elif block_type == "divider":
             children.append({"block_type": 22, "divider": {}})
         else:
@@ -225,10 +234,48 @@ class FeishuDocClient:
 
     def create_blocks(self, document_id: str, children: list[dict]) -> dict:
         parent_id = self.page_block_id(document_id)
+        results: list[dict] = []
+        simple_batch: list[dict] = []
+
+        def flush_simple() -> None:
+            if not simple_batch:
+                return
+            results.append(self._create_child_blocks(document_id, parent_id, simple_batch))
+            simple_batch.clear()
+
+        for child in children:
+            if _is_internal_table_child(child):
+                flush_simple()
+                try:
+                    results.append(self._create_table_descendants(document_id, parent_id, child))
+                except Exception:
+                    fallback = _table_fallback_children(child)
+                    if fallback:
+                        results.append(self._create_child_blocks(document_id, parent_id, fallback))
+            else:
+                simple_batch.append(_strip_internal_keys(child))
+        flush_simple()
+        return {"results": results}
+
+    def _create_child_blocks(self, document_id: str, parent_id: str, children: list[dict]) -> dict:
         response = httpx.post(
             f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks/{parent_id}/children",
             headers=self.authorization_header(),
             json={"children": children, "index": -1},
+            timeout=30.0,
+        )
+        _raise_for_feishu_error(response)
+        data = response.json()
+        if data.get("code") not in (None, 0):
+            raise RuntimeError(str(data))
+        return data.get("data") or {}
+
+    def _create_table_descendants(self, document_id: str, parent_id: str, table_child: dict) -> dict:
+        descendant_payload = _table_descendant_payload(table_child)
+        response = httpx.post(
+            f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks/{parent_id}/descendant",
+            headers=self.authorization_header(),
+            json=descendant_payload,
             timeout=30.0,
         )
         _raise_for_feishu_error(response)
@@ -276,6 +323,8 @@ def _block_to_doc_blocks(block: dict) -> list[dict]:
     kind = block.get("kind")
     title = str(block.get("title") or "")
     out: list[dict] = [{"type": "heading", "text": title, "level": 2, "source_refs": {"block_id": block.get("id")}}]
+    if block.get("description"):
+        out.append({"type": "quote", "text": str(block.get("description") or "")})
     if kind == "cover":
         out.extend({"type": "paragraph", "text": str(block[key])} for key in ("kicker", "subtitle") if block.get(key))
     elif kind == "split":
@@ -283,18 +332,86 @@ def _block_to_doc_blocks(block: dict) -> list[dict]:
     elif kind == "flow":
         out.append({"type": "code", "language": "mermaid", "text": _mermaid(block)})
     elif kind == "metrics":
-        out.append({"type": "table", "rows": [["Metric", "Value", "Note"], *[[i.get("label", ""), i.get("value", ""), i.get("note", "")] for i in block.get("items", []) if isinstance(i, dict)]]})
+        rows = [["指标", "数值", "说明"], *[[i.get("label", ""), i.get("value", ""), i.get("note", "")] for i in block.get("items", []) if isinstance(i, dict)]]
+        out.append(_table_doc_block(rows, str(block.get("caption") or "")))
     elif kind == "cards":
         for card in block.get("cards", []):
             if isinstance(card, dict):
-                out.extend([{"type": "heading", "text": str(card.get("title", "")), "level": 3}, {"type": "paragraph", "text": str(card.get("body", ""))}])
+                out.append({"type": "heading", "text": str(card.get("title", "")), "level": 3})
+                meta = " | ".join(_display_meta_items(card.get("meta", [])))
+                if meta:
+                    out.append({"type": "paragraph", "text": meta})
+                if card.get("body"):
+                    out.append({"type": "paragraph", "text": str(card.get("body", ""))})
     elif kind == "table":
-        out.append({"type": "table", "rows": [block.get("columns", []), *block.get("rows", [])]})
+        if block.get("caption"):
+            out.append({"type": "paragraph", "text": str(block.get("caption") or "")})
+        out.append(_table_doc_block([block.get("columns", []), *block.get("rows", [])], str(block.get("caption") or "")))
     elif kind == "timeline":
-        out.extend({"type": "bullet", "text": f"{event.get('date', '')} {event.get('title', '')}: {event.get('body', '')}"} for event in block.get("events", []) if isinstance(event, dict))
+        out.extend({"type": "bullet", "text": _timeline_event_text(event)} for event in block.get("events", []) if isinstance(event, dict))
     elif kind == "image":
         out.append({"type": "paragraph", "text": f"[Image] {block.get('caption') or block.get('image') or ''}"})
+    out.extend(_source_ref_blocks(block.get("sourceRefs")))
     return out
+
+
+def _table_doc_block(rows: list[list], caption: str = "") -> dict:
+    normalized = _normalize_table_rows(rows)
+    return {
+        "type": "table",
+        "rows": normalized,
+        "caption": caption,
+    } if normalized else {"type": "paragraph", "text": caption}
+
+
+def _timeline_event_text(event: dict) -> str:
+    meta = " | ".join(str(event.get(key) or "").strip() for key in ("owner", "status") if str(event.get(key) or "").strip())
+    prefix = f"{event.get('date', '')} {event.get('title', '')}".strip()
+    body = str(event.get("body") or "").strip()
+    text = f"{prefix}: {body}" if body else prefix
+    return f"{text} ({meta})" if meta else text
+
+
+def _source_ref_blocks(value: Any) -> list[dict]:
+    refs = [_display_source_ref(item) for item in value] if isinstance(value, list) else []
+    refs = [item for item in refs if item]
+    if not refs:
+        return []
+    return [{"type": "quote", "text": "来源：" + " | ".join(refs)}]
+
+
+def _display_meta_items(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (_display_meta_item(raw) for raw in value) if item]
+
+
+def _display_meta_item(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "待确认" in text or "unknown" in lower or lower == "n/a":
+        return ""
+    if "http://" in lower or "https://" in lower:
+        return "文档链接"
+    if "message:" in lower or "source:" in lower or "om_" in lower:
+        return ""
+    return text if len(text) <= 48 else ""
+
+
+def _display_source_ref(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "http://" in lower or "https://" in lower:
+        return "文档链接"
+    if "message:" in lower:
+        return "消息"
+    if "om_" in lower:
+        return "消息"
+    return text if len(text) <= 40 else text[:37] + "..."
 
 
 def _mermaid(block: dict) -> str:
@@ -330,6 +447,70 @@ def _text_element(text: str) -> dict:
 
 def _table_width(rows: list) -> int:
     return max([len(row) for row in rows if isinstance(row, list)] or [1])
+
+
+def _normalize_table_rows(rows: Any) -> list[list[str]]:
+    if not isinstance(rows, list):
+        return []
+    width = _table_width(rows)
+    normalized = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        cells = [str(cell).strip() or "待确认" for cell in row]
+        normalized.append((cells + ["待确认"] * width)[:width])
+    return [row for row in normalized if any(cell.strip() for cell in row)]
+
+
+def _is_internal_table_child(child: dict) -> bool:
+    return child.get("block_type") == 31 and isinstance(child.get("_table_rows"), list)
+
+
+def _strip_internal_keys(child: dict) -> dict:
+    return {key: value for key, value in child.items() if not str(key).startswith("_")}
+
+
+def _table_descendant_payload(table_child: dict) -> dict:
+    rows = _normalize_table_rows(table_child.get("_table_rows"))
+    row_size = len(rows)
+    column_size = _table_width(rows)
+    table_id = "table_1"
+    descendants: list[dict] = [
+        {
+            "block_id": table_id,
+            "block_type": 31,
+            "table": {"property": {"row_size": row_size, "column_size": column_size, "header_row": True}},
+            "children": [
+                f"cell_{row_index}_{column_index}"
+                for row_index in range(row_size)
+                for column_index in range(column_size)
+            ],
+        }
+    ]
+    for row_index, row in enumerate(rows):
+        for column_index, text in enumerate(row):
+            cell_id = f"cell_{row_index}_{column_index}"
+            text_id = f"text_{row_index}_{column_index}"
+            descendants.append({"block_id": cell_id, "block_type": 32, "children": [text_id]})
+            descendants.append({"block_id": text_id, **_text_block(2, "text", text)})
+    return {"children_id": [table_id], "descendants": descendants, "index": -1}
+
+
+def _table_fallback_children(table_child: dict) -> list[dict]:
+    rows = _normalize_table_rows(table_child.get("_table_rows"))
+    return [_text_block(14, "code", "\n".join(_markdown_table(rows)))] if rows else []
+
+
+def _markdown_table(rows: list[list[str]]) -> list[str]:
+    if not rows:
+        return []
+    width = _table_width(rows)
+    normalized = [(row + [""] * width)[:width] for row in rows]
+    return [
+        "| " + " | ".join(normalized[0]) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+        *["| " + " | ".join(row) + " |" for row in normalized[1:]],
+    ]
 
 
 def _extract_document_id(value: Any) -> str:

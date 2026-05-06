@@ -65,6 +65,10 @@ def ensure_ir_defaults(ir: dict) -> dict:
             continue
         block.setdefault("id", f"block_{index + 1}")
         block.setdefault("title", str(block.get("id") or f"Block {index + 1}"))
+        block.setdefault("description", "")
+        block.setdefault("intent", "")
+        if not isinstance(block.get("sourceRefs"), list):
+            block["sourceRefs"] = _string_list(block.get("sourceRefs") or block.get("source_refs"))
         kind = block.get("kind")
         if kind == "split":
             block.setdefault("points", [])
@@ -75,11 +79,15 @@ def ensure_ir_defaults(ir: dict) -> dict:
             block.setdefault("items", [])
         elif kind == "cards":
             block.setdefault("cards", [])
+            block["cards"] = _normalize_cards(block["cards"])
         elif kind == "table":
             block.setdefault("columns", [])
             block.setdefault("rows", [])
+            block["columns"] = _string_list(block["columns"])
+            block["rows"] = _normalize_table_rows(block["rows"], len(block["columns"]))
         elif kind == "timeline":
             block.setdefault("events", [])
+            block["events"] = _normalize_events(block["events"])
     return out
 
 
@@ -115,13 +123,32 @@ def validate_ir(ir: dict) -> list[str]:
             errors.append(f"Unsupported block kind: {kind}.")
         elif not _block_has_renderable_content(block):
             errors.append(f"Block {block_id or index} has no renderable content for kind {kind}.")
+        if _requires_table_intent(block) and kind != "table":
+            errors.append(f"Block {block_id or index} intent {block.get('intent')} must use kind table.")
+        if not isinstance(block.get("sourceRefs"), list):
+            errors.append(f"Block {block_id or index} sourceRefs must be an array.")
         if kind == "flow":
             _validate_flow(block, block_id or f"blocks[{index}]", errors)
         elif kind == "table":
             if not isinstance(block.get("columns"), list) or not isinstance(block.get("rows"), list):
                 errors.append(f"Table block {block_id} columns and rows must be arrays.")
+            elif not any(str(column).strip() for column in block.get("columns", [])):
+                errors.append(f"Table block {block_id} columns must contain at least one header.")
+            else:
+                width = len(block.get("columns", []))
+                for row_index, row in enumerate(block.get("rows", [])):
+                    if not isinstance(row, list):
+                        errors.append(f"Table block {block_id} rows[{row_index}] must be an array.")
+                    elif len(row) != width:
+                        errors.append(f"Table block {block_id} rows[{row_index}] must match columns length.")
         elif kind == "cards" and not isinstance(block.get("cards"), list):
             errors.append(f"Cards block {block_id} cards must be an array.")
+        elif kind == "cards":
+            for card_index, card in enumerate(block.get("cards", [])):
+                if not isinstance(card, dict):
+                    errors.append(f"Cards block {block_id} cards[{card_index}] must be an object.")
+                elif not (str(card.get("title") or "").strip() or str(card.get("body") or "").strip()):
+                    errors.append(f"Cards block {block_id} cards[{card_index}] must contain title or body.")
         elif kind == "metrics" and not isinstance(block.get("items"), list):
             errors.append(f"Metrics block {block_id} items must be an array.")
         elif kind == "timeline" and not isinstance(block.get("events"), list):
@@ -166,7 +193,7 @@ def _block_has_renderable_content(block: dict[str, Any]) -> bool:
     if kind == "cards":
         return bool(_non_empty_list(block.get("cards")))
     if kind == "table":
-        return bool(_non_empty_list(block.get("columns")) or _non_empty_list(block.get("rows")))
+        return bool(_non_empty_list(block.get("columns")) and (_non_empty_list(block.get("rows")) or str(block.get("caption") or block.get("description") or "").strip()))
     if kind == "timeline":
         return bool(_non_empty_list(block.get("events")))
     if kind == "image":
@@ -176,3 +203,79 @@ def _block_has_renderable_content(block: dict[str, Any]) -> bool:
 
 def _non_empty_list(value: Any) -> bool:
     return isinstance(value, list) and len(value) > 0
+
+
+def _requires_table_intent(block: dict[str, Any]) -> bool:
+    return str(block.get("intent") or "").strip().lower() in {"actions", "risks", "comparison", "metrics"}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_cards(value: Any) -> list[dict[str, Any]]:
+    output = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        card = dict(item)
+        card.setdefault("title", "")
+        card.setdefault("body", "")
+        if not isinstance(card.get("meta"), list):
+            card["meta"] = _string_list(card.get("meta"))
+        card["meta"] = [_clean_meta_item(meta) for meta in card.get("meta", [])]
+        card["meta"] = [meta for meta in card["meta"] if meta]
+        output.append(card)
+    return output
+
+
+def _clean_meta_item(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "待确认" in text or "unknown" in lower or lower == "n/a":
+        return ""
+    if "http://" in lower or "https://" in lower:
+        return ""
+    if "message:" in lower or "source:" in lower or "om_" in lower:
+        return ""
+    if len(text) > 48:
+        return ""
+    return text
+
+
+def _normalize_events(value: Any) -> list[dict[str, Any]]:
+    output = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        event = dict(item)
+        event.setdefault("date", "")
+        event.setdefault("title", "")
+        event.setdefault("body", "")
+        event.setdefault("owner", "")
+        event.setdefault("status", "")
+        output.append(event)
+    return output
+
+
+def _normalize_table_rows(value: Any, width: int) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for row in value:
+        if isinstance(row, list):
+            cells = [str(cell).strip() or "待确认" for cell in row]
+        elif isinstance(row, dict):
+            cells = [str(cell).strip() or "待确认" for cell in row.values()]
+        else:
+            cells = [str(row).strip()]
+        if not any(cell.strip() for cell in cells):
+            continue
+        if width > 0:
+            cells = (cells + ["待确认"] * width)[:width]
+        rows.append(cells)
+    return rows

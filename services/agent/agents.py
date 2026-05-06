@@ -39,7 +39,23 @@ Rules:
 - blocks must be non-empty and use only these kinds: cover, split, flow,
   metrics, cards, table, timeline, image.
 - Return {"ir": {...}, "warnings": ["..."]}.
+- Prefer readable, publishable blocks: use table for structured lists, cards
+  for explanatory modules, timeline for ordered plans, and split for key
+  conclusions.
+- Use block.intent to describe purpose, such as summary, actions, risks,
+  decisions, comparison, evidence, or metrics. Do not depend on intent for
+  content; still fill the block's normal fields.
+- When intent is actions, risks, comparison, or metrics, kind must be table.
+  Put owner, status, due dates, risks, impacts, and evidence in columns/rows,
+  not in cards.
 - Every block must include all schema keys. For unused fields, return "" or [].
+- For table blocks, columns must be meaningful headers and rows must contain
+  actual cell text. Use "待确认" for unknown values instead of empty cells.
+- Use description for one short section explanation and sourceRefs for message,
+  file, or time references when available.
+- For cards, put compact metadata such as owner, status, due, link, or source
+  in cards[].meta. Do not put URLs, message IDs, source IDs, long prose, or
+  unknown/default values such as 待确认 in meta; put references in sourceRefs.
 - Do not create empty content blocks: split.points, flow.nodes, metrics.items,
   cards.cards, table.rows, timeline.events, or image.caption/image must contain
   useful content when that kind is used.
@@ -305,6 +321,8 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
                                 "id",
                                 "kind",
                                 "title",
+                                "description",
+                                "intent",
                                 "subtitle",
                                 "kicker",
                                 "points",
@@ -317,6 +335,7 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
                                 "events",
                                 "caption",
                                 "image",
+                                "sourceRefs",
                             ],
                             "properties": {
                                 "id": {"type": "string"},
@@ -324,19 +343,48 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
                                     "type": "string",
                                     "enum": ["cover", "split", "flow", "metrics", "cards", "table", "timeline", "image"],
                                 },
-                                "title": {"type": "string"},
+                                "title": {"type": "string", "description": "Section title shown as a heading."},
+                                "description": {
+                                    "type": "string",
+                                    "description": "One short sentence shown below the heading to explain this section's context. Use an empty string if not needed.",
+                                },
+                                "intent": {
+                                    "type": "string",
+                                    "description": "Semantic purpose such as summary, actions, risks, decisions, comparison, evidence, or metrics. If intent is actions, risks, comparison, or metrics, use kind=table and put the structured data in columns/rows.",
+                                },
                                 "subtitle": {"type": "string"},
                                 "kicker": {"type": "string"},
-                                "points": {"type": "array", "items": {"type": "string"}},
+                                "points": {
+                                    "type": "array",
+                                    "description": "Complete bullet sentences for split blocks. Use for conclusions, decisions, or evidence notes.",
+                                    "items": {"type": "string"},
+                                },
                                 "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}},
                                 "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
                                 "items": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
-                                "cards": {"type": "array", "items": {"$ref": "#/$defs/card_body"}},
-                                "columns": {"type": "array", "items": {"type": "string"}},
-                                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                                "cards": {
+                                    "type": "array",
+                                    "description": "Cards for explanatory modules. Each card should have a specific title, readable body, and compact meta for owner/status/due/link/source when useful.",
+                                    "items": {"$ref": "#/$defs/card_body"},
+                                },
+                                "columns": {
+                                    "type": "array",
+                                    "description": "Table header labels. For action lists prefer 事项, 负责人, 截止时间, 状态, 验收标准; for risks prefer 风险, 影响, 缓解措施, 负责人. Keep headers concise and non-empty.",
+                                    "items": {"type": "string"},
+                                },
+                                "rows": {
+                                    "type": "array",
+                                    "description": "Actual table body cell text. Each row must align with columns. Do not use empty placeholders; use 待确认 for unknown values.",
+                                    "items": {"type": "array", "items": {"type": "string"}},
+                                },
                                 "events": {"type": "array", "items": {"$ref": "#/$defs/event_body"}},
                                 "caption": {"type": "string"},
                                 "image": {"type": "string"},
+                                "sourceRefs": {
+                                    "type": "array",
+                                    "description": "References to source messages, files, links, speakers, or times that support this block. Use empty array when unavailable.",
+                                    "items": {"type": "string"},
+                                },
                             },
                         },
                     },
@@ -369,17 +417,27 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
             "card_body": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["title", "body"],
-                "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+                "required": ["title", "body", "meta"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "meta": {
+                        "type": "array",
+                        "description": "Compact key-value facts such as owner: Alice, status: open, due: Friday. Do not include URLs, message IDs, source IDs, long prose, or unknown/default values such as 待确认.",
+                        "items": {"type": "string"},
+                    },
+                },
             },
             "event_body": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["date", "title", "body"],
+                "required": ["date", "title", "body", "owner", "status"],
                 "properties": {
                     "date": {"type": "string"},
                     "title": {"type": "string"},
                     "body": {"type": "string"},
+                    "owner": {"type": "string"},
+                    "status": {"type": "string"},
                 },
             },
         },
@@ -550,7 +608,7 @@ def generate_ir_from_messages(request: dict) -> dict:
     ir = _ensure_ir_defaults(ir, payload)
     validation = _validate_ir(ir)
     if validation:
-        fallback_ir = _summary_ir_from_request(payload)
+        fallback_ir = _ensure_ir_defaults(_summary_ir_from_request(payload), payload)
         fallback_validation = _validate_ir(fallback_ir)
         if not fallback_validation:
             return _finish(
@@ -917,6 +975,9 @@ def _coerce_artifact_block(block: JsonDict, index: int) -> JsonDict:
         out,
     )
     out["kind"] = kind
+    out["description"] = str(out.get("description") or out.get("summary") or "").strip()
+    out["intent"] = str(out.get("intent") or out.get("purpose") or "").strip()
+    out["sourceRefs"] = _string_list_from_any(out.get("sourceRefs") or out.get("source_refs") or out.get("sources"))
 
     content = out.get("content")
     if kind == "split":
@@ -942,6 +1003,8 @@ def _coerce_artifact_block(block: JsonDict, index: int) -> JsonDict:
         )
         if cards:
             out["cards"] = cards
+        elif isinstance(out.get("cards"), list):
+            out["cards"] = _card_list_from_any(out.get("cards"))
     elif kind == "metrics":
         items = _metric_list_from_any(out.get("items") or out.get("metrics") or out.get("cards") or content)
         if items:
@@ -951,10 +1014,14 @@ def _coerce_artifact_block(block: JsonDict, index: int) -> JsonDict:
             out["columns"] = _string_list_from_any(out.get("columns") or out.get("headers"))
         if not isinstance(out.get("rows"), list):
             out["rows"] = _rows_from_any(out.get("rows") or out.get("items") or content)
+        out["columns"] = _string_list_from_any(out.get("columns"))
+        out["rows"] = _normalize_table_rows(out.get("rows"), len(out["columns"]))
     elif kind == "timeline":
         events = _event_list_from_any(out.get("events") or out.get("items") or out.get("timeline") or content)
         if events:
             out["events"] = events
+        elif isinstance(out.get("events"), list):
+            out["events"] = _event_list_from_any(out.get("events"))
     elif kind == "flow":
         if not isinstance(out.get("nodes"), list):
             out["nodes"] = _flow_nodes_from_any(out.get("nodes") or out.get("steps") or out.get("items") or content)
@@ -1148,7 +1215,28 @@ def _ensure_ir_defaults(ir: JsonDict, request: JsonDict) -> JsonDict:
             continue
         block.setdefault("id", f"block_{index + 1}")
         block.setdefault("title", str(block.get("id") or f"Block {index + 1}"))
+        _ensure_block_defaults(block)
     return out
+
+
+def _ensure_block_defaults(block: JsonDict) -> None:
+    block.setdefault("description", "")
+    block.setdefault("intent", "")
+    if not isinstance(block.get("sourceRefs"), list):
+        block["sourceRefs"] = _string_list_from_any(block.get("sourceRefs") or block.get("source_refs"))
+    kind = block.get("kind")
+    for key in ("subtitle", "kicker", "caption", "image"):
+        block.setdefault(key, "")
+    for key in ("points", "nodes", "edges", "items", "cards", "columns", "rows", "events"):
+        if not isinstance(block.get(key), list):
+            block[key] = []
+    if kind == "cards":
+        block["cards"] = _card_list_from_any(block.get("cards"))
+    elif kind == "timeline":
+        block["events"] = _event_list_from_any(block.get("events"))
+    elif kind == "table":
+        block["columns"] = _string_list_from_any(block.get("columns"))
+        block["rows"] = _normalize_table_rows(block.get("rows"), len(block["columns"]))
 
 
 def _ensure_content_ir_defaults(content_ir: JsonDict, request: JsonDict) -> JsonDict:
@@ -1252,7 +1340,39 @@ def _validate_ir(ir: JsonDict) -> list[str]:
             errors.append(f"Unsupported block kind: {kind}.")
         elif not _block_has_renderable_content(block):
             errors.append(f"Block {block_id or index} has no renderable content for kind {kind}.")
+        if _requires_table_intent(block) and kind != "table":
+            errors.append(f"Block {block_id or index} intent {block.get('intent')} must use kind table.")
+        if not isinstance(block.get("sourceRefs"), list):
+            errors.append(f"Block {block_id or index} sourceRefs must be an array.")
+        if kind == "table":
+            columns = block.get("columns")
+            rows = block.get("rows")
+            if not isinstance(columns, list) or not columns or not any(str(col).strip() for col in columns):
+                errors.append(f"Table block {block_id or index} columns must contain at least one header.")
+            if not isinstance(rows, list):
+                errors.append(f"Table block {block_id or index} rows must be an array.")
+            elif rows and columns:
+                width = len(columns)
+                for row_index, row in enumerate(rows):
+                    if not isinstance(row, list):
+                        errors.append(f"Table block {block_id or index} rows[{row_index}] must be an array.")
+                    elif len(row) != width:
+                        errors.append(f"Table block {block_id or index} rows[{row_index}] must match columns length.")
+        elif kind == "cards":
+            cards = block.get("cards")
+            if not isinstance(cards, list):
+                errors.append(f"Cards block {block_id or index} cards must be an array.")
+            else:
+                for card_index, card in enumerate(cards):
+                    if not isinstance(card, dict):
+                        errors.append(f"Cards block {block_id or index} cards[{card_index}] must be an object.")
+                    elif not (str(card.get("title") or "").strip() or str(card.get("body") or "").strip()):
+                        errors.append(f"Cards block {block_id or index} cards[{card_index}] must contain title or body.")
     return errors
+
+
+def _requires_table_intent(block: JsonDict) -> bool:
+    return str(block.get("intent") or "").strip().lower() in {"actions", "risks", "comparison", "metrics"}
 
 
 def _block_has_renderable_content(block: JsonDict) -> bool:
@@ -1268,7 +1388,7 @@ def _block_has_renderable_content(block: JsonDict) -> bool:
     if kind == "cards":
         return bool(_as_list(block.get("cards")))
     if kind == "table":
-        return bool(_as_list(block.get("columns")) or _as_list(block.get("rows")))
+        return bool(_as_list(block.get("columns")) and (_as_list(block.get("rows")) or str(block.get("caption") or block.get("description") or "").strip()))
     if kind == "timeline":
         return bool(_as_list(block.get("events")))
     if kind == "image":
@@ -1555,10 +1675,11 @@ def _card_list_from_any(value: Any) -> list[JsonDict]:
                 {
                     "title": str(item.get("title") or item.get("label") or item.get("name") or item.get("id") or ""),
                     "body": str(item.get("body") or item.get("description") or item.get("text") or item.get("note") or ""),
+                    "meta": _meta_list_from_any(item.get("meta") or item.get("metadata") or item.get("facts")),
                 }
             )
         elif str(item).strip():
-            output.append({"title": str(item).strip(), "body": ""})
+            output.append({"title": str(item).strip(), "body": "", "meta": []})
     return [item for item in output if item["title"] or item["body"]]
 
 
@@ -1585,6 +1706,8 @@ def _event_list_from_any(value: Any) -> list[JsonDict]:
                     "date": str(item.get("date") or item.get("time") or item.get("phase") or ""),
                     "title": str(item.get("title") or item.get("label") or item.get("name") or ""),
                     "body": str(item.get("body") or item.get("description") or item.get("text") or item.get("note") or ""),
+                    "owner": str(item.get("owner") or item.get("assignee") or ""),
+                    "status": str(item.get("status") or item.get("state") or ""),
                 }
             )
     return [item for item in output if item["date"] or item["title"] or item["body"]]
@@ -1600,6 +1723,41 @@ def _rows_from_any(value: Any) -> list[list[str]]:
         elif str(item).strip():
             output.append([str(item).strip()])
     return [row for row in output if any(cell.strip() for cell in row)]
+
+
+def _meta_list_from_any(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        raw_items = [f"{key}: {val}" for key, val in value.items() if str(val).strip()]
+    else:
+        raw_items = _string_list_from_any(value)
+    return [item for item in (_clean_meta_item(raw) for raw in raw_items) if item]
+
+
+def _clean_meta_item(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "待确认" in text or "unknown" in lower or "n/a" == lower:
+        return ""
+    if "http://" in lower or "https://" in lower:
+        return ""
+    if "message:" in lower or "source:" in lower or "om_" in lower:
+        return ""
+    if len(text) > 48:
+        return ""
+    return text
+
+
+def _normalize_table_rows(value: Any, width: int) -> list[list[str]]:
+    rows = _rows_from_any(value)
+    if width <= 0:
+        return rows
+    normalized = []
+    for row in rows:
+        cells = [str(cell).strip() or "待确认" for cell in row]
+        normalized.append((cells + ["待确认"] * width)[:width])
+    return normalized
 
 
 def _safe_id(value: str) -> str:

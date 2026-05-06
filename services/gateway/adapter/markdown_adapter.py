@@ -31,17 +31,19 @@ def ir_to_markdown(ir: dict) -> str:
 def _block_to_markdown(block: dict) -> list[str]:
     kind = block.get("kind")
     title = str(block.get("title") or "")
+    out = [f"## {title}"]
+    if block.get("description"):
+        out.append(f"> {block['description']}")
     if kind == "cover":
-        out = [f"## {title}"]
         if block.get("kicker"):
             out.append(f"**{block['kicker']}**")
         if block.get("subtitle"):
             out.append(str(block["subtitle"]))
-        return out
+        return _with_source_refs(out, block)
     if kind == "split":
-        return [f"## {title}", *[f"- {point}" for point in block.get("points", [])]]
+        out.extend(f"- {point}" for point in block.get("points", []))
+        return _with_source_refs(out, block)
     if kind == "flow":
-        out = [f"## {title}"]
         if block.get("caption"):
             out.append(str(block["caption"]))
         out.extend(["```mermaid", "flowchart LR"])
@@ -54,30 +56,40 @@ def _block_to_markdown(block: dict) -> list[str]:
             elif isinstance(edge, dict):
                 out.append(f"  {edge.get('from')} --> {edge.get('to')}")
         out.append("```")
-        return out
+        return _with_source_refs(out, block)
     if kind == "metrics":
-        rows = [["Metric", "Value", "Note"]]
+        rows = [["指标", "数值", "说明"]]
         rows.extend([[item.get("label", ""), item.get("value", ""), item.get("note", "")] for item in block.get("items", []) if isinstance(item, dict)])
-        return [f"## {title}", *_markdown_table(rows)]
+        out.extend(_markdown_table(rows))
+        return _with_source_refs(out, block)
     if kind == "cards":
-        out = [f"## {title}"]
         for card in block.get("cards", []):
             if isinstance(card, dict):
-                out.extend([f"### {card.get('title', '')}", str(card.get("body", ""))])
-        return out
+                out.append(f"### {card.get('title', '')}")
+                meta = " | ".join(_display_meta_items(card.get("meta", [])))
+                if meta:
+                    out.append(meta)
+                if card.get("body"):
+                    out.append(str(card.get("body", "")))
+        return _with_source_refs(out, block)
     if kind == "table":
-        return [f"## {title}", *_markdown_table([block.get("columns", []), *block.get("rows", [])])]
+        if block.get("caption"):
+            out.append(str(block.get("caption") or ""))
+        out.extend(_markdown_table([block.get("columns", []), *block.get("rows", [])]))
+        return _with_source_refs(out, block)
     if kind == "timeline":
-        out = [f"## {title}"]
         for event in block.get("events", []):
             if isinstance(event, dict):
-                out.append(f"- **{event.get('date', '')} {event.get('title', '')}:** {event.get('body', '')}")
-        return out
+                meta = " | ".join(str(event.get(key) or "").strip() for key in ("owner", "status") if str(event.get(key) or "").strip())
+                suffix = f" ({meta})" if meta else ""
+                out.append(f"- **{event.get('date', '')} {event.get('title', '')}:** {event.get('body', '')}{suffix}")
+        return _with_source_refs(out, block)
     if kind == "image":
         caption = block.get("caption") or title
         image = block.get("image") or ""
-        return [f"## {title}", f"![{caption}]({image})" if image else str(caption)]
-    return [f"## {title}"]
+        out.append(f"![{caption}]({image})" if image else str(caption))
+        return _with_source_refs(out, block)
+    return _with_source_refs(out, block)
 
 
 def _markdown_table(rows: list[list]) -> list[str]:
@@ -92,3 +104,43 @@ def _markdown_table(rows: list[list]) -> list[str]:
         "| " + " | ".join(["---"] * width) + " |",
         *["| " + " | ".join(row) + " |" for row in normalized[1:]],
     ]
+
+
+def _with_source_refs(lines: list[str], block: dict) -> list[str]:
+    refs = [_display_source_ref(item) for item in block.get("sourceRefs", [])] if isinstance(block.get("sourceRefs"), list) else []
+    refs = [item for item in refs if item]
+    if refs:
+        lines.append("> 来源：" + " | ".join(refs))
+    return lines
+
+
+def _display_meta_items(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in (_display_meta_item(raw) for raw in value) if item]
+
+
+def _display_meta_item(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "待确认" in text or "unknown" in lower or lower == "n/a":
+        return ""
+    if "http://" in lower or "https://" in lower:
+        return "文档链接"
+    if "message:" in lower or "source:" in lower or "om_" in lower:
+        return ""
+    return text if len(text) <= 48 else ""
+
+
+def _display_source_ref(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if "http://" in lower or "https://" in lower:
+        return "文档链接"
+    if "message:" in lower or "om_" in lower:
+        return "消息"
+    return text if len(text) <= 40 else text[:37] + "..."
