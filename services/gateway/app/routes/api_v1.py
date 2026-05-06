@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-import urllib.parse
 from typing import Any, Optional
 
 import httpx
@@ -23,6 +22,7 @@ from pydantic import BaseModel, Field
 from ...adapter.runtime import lark_cli_path, parse_json_object
 from ..config import Settings, get_settings
 from ..drive_artifacts import list_artifacts
+from ..oauth_tokens import build_feishu_authorize_url, decode_oauth_state, encode_oauth_state, save_user_token
 from ..pipelines.delivery import run_deliver_artifacts
 from ..pipelines.summary_from_event import run_summary_for_chat
 
@@ -46,29 +46,37 @@ def auth_dev(request: Request) -> dict[str, str]:
 
 
 @router.get("/auth/login")
-def auth_login(s: Settings = Depends(get_settings)) -> Response:
+def auth_login(
+    request: Request,
+    state: str = "",
+    user_id: str = "",
+    reason: str = "web",
+    s: Settings = Depends(get_settings),
+) -> Response:
     if not s.lark_app_id:
         return Response(
             content="未配置 LARK_APP_ID。开发环境可 POST /api/v1/auth/dev 登录。",
             media_type="text/plain; charset=utf-8",
         )
-    params = {
-        "app_id": s.lark_app_id,
-        "redirect_uri": s.oauth_redirect_uri,
-        "state": "x",
-    }
-    u = s.lark_base_url + "/open-apis/authen/v1/authorize?" + urllib.parse.urlencode(
-        {**params, "response_type": "code", "scope": "contact:user.base:readonly"}
+    signed_state = state or encode_oauth_state(
+        s,
+        {
+            "user_id": user_id or request.session.get("user_open_id", ""),
+            "reason": reason,
+            "next": s.public_web_base_url,
+        },
     )
-    return Response(status_code=302, headers={"Location": u})
+    return Response(status_code=302, headers={"Location": build_feishu_authorize_url(s, signed_state)})
 
 
 @router.get("/auth/callback")
 def auth_callback(
     request: Request,
     code: str = "",
+    state: str = "",
     s: Settings = Depends(get_settings),
 ) -> RedirectResponse:
+    state_data = decode_oauth_state(s, state)
     if s.lark_app_id and code:
         # 使用官方接口换 user_access_token（SaaS 侧可能不同，MVP 占位）
         try:
@@ -85,13 +93,19 @@ def auth_callback(
             )
             r.raise_for_status()
             j = r.json()
+            if j.get("code", 0) != 0:
+                raise RuntimeError(f"OAuth exchange failed: code={j.get('code')} msg={j.get('msg')}")
             d = (j or {}).get("data") or {}
+            expected_user_id = str(state_data.get("user_id") or "")
+            saved = save_user_token(s, d, expected_user_id=expected_user_id)
             oid = d.get("user_id") or d.get("open_id") or "oauth-user"
+            if saved.get("ok") and saved.get("user_id"):
+                oid = saved["user_id"]
             request.session["user_open_id"] = str(oid)
         except Exception as e:  # noqa: BLE001
             log.warning("OAuth exchange: %s", e)
             request.session["user_open_id"] = "dev-oauth-fallback"
-    return RedirectResponse(s.public_web_base_url or "/")
+    return RedirectResponse(str(state_data.get("next") or s.public_web_base_url or "/"))
 
 
 @router.get("/artifacts")

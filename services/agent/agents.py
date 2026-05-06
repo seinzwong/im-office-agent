@@ -28,6 +28,9 @@ PLANB_IR_PROMPT = """You are the only Agent in PlanB.
 
 Use all scope messages in the input to write one complete platform-neutral
 industrial Artifact IR. Return JSON only.
+For summary_from_chat tasks, focus on the chat's main goals and the proposed
+deliverable solution: clarify objectives, decisions, blockers, action plan,
+owners when available, risks, and expected outcomes.
 
 Rules:
 - Do not produce topic summaries, task summaries, JSON Patch, Feishu OpenAPI
@@ -494,7 +497,9 @@ def generate_slide_draft_from_content_ir(content_ir: dict, options: dict | None 
 
 
 def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
-    return _call_llm_json(payload, PLANB_IR_PROMPT)
+    options = _as_dict(payload.get("options"))
+    model_override = str(options.get("llm_model") or options.get("model") or "").strip() or None
+    return _call_llm_json(payload, PLANB_IR_PROMPT, model_override=model_override, purpose="artifact_ir")
 
 
 def _call_llm_json(
