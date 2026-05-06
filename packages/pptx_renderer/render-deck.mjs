@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 
 const SLIDE_W = 13.333;
 const SLIDE_H = 7.5;
+const DEFAULT_FONT_FACE = 'Microsoft YaHei';
 
 function argValue(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -58,7 +59,7 @@ function themeOf(deck) {
     coverTitle: 'FFFFFF',
     coverSubtitle: 'E2E8F0',
     coverMuted: 'CBD5E1',
-    fontFace: raw.fontFace || raw.font_face || 'Aptos',
+    fontFace: cleanText(raw.fontFace || raw.font_face) || DEFAULT_FONT_FACE,
   };
 }
 
@@ -69,16 +70,14 @@ function addText(slide, text, opts, theme) {
     fontFace: theme.fontFace,
     margin: 0.07,
     breakLine: false,
-    fit: 'shrink',
     ...opts,
   });
 }
 
 function addTitle(slide, title, theme) {
-  addText(slide, title, {
+  addText(slide, budgetText(title, { maxWeight: 44, maxLines: 1 }), {
     x: 0.55, y: 0.35, w: 12.0, h: 0.55,
     fontSize: 25, bold: true, color: theme.text,
-    fit: 'shrink',
   }, theme);
 }
 
@@ -106,24 +105,75 @@ function cleanLines(values) {
     .filter(Boolean);
 }
 
+function charWeight(ch) {
+  return /[\u2E80-\u9FFF\uF900-\uFAFF]/.test(ch) ? 2 : 1;
+}
+
+function textWeight(value) {
+  return Array.from(cleanText(value)).reduce((sum, ch) => sum + charWeight(ch), 0);
+}
+
+function truncateByWeight(value, maxWeight) {
+  const text = cleanText(value);
+  if (!maxWeight || textWeight(text) <= maxWeight) return text;
+  let used = 0;
+  let out = '';
+  const limit = Math.max(1, maxWeight - 3);
+  for (const ch of Array.from(text)) {
+    const next = used + charWeight(ch);
+    if (next > limit) break;
+    out += ch;
+    used = next;
+  }
+  return `${out.trimEnd()}...`;
+}
+
+function wrapByWeight(value, maxLineWeight, maxLines) {
+  const text = cleanText(value);
+  if (!text) return '';
+  const lines = [];
+  let line = '';
+  let used = 0;
+  for (const ch of Array.from(text)) {
+    if (ch === '\n') {
+      if (line.trim()) lines.push(line.trim());
+      line = '';
+      used = 0;
+      continue;
+    }
+    const weight = charWeight(ch);
+    if (line && used + weight > maxLineWeight) {
+      lines.push(line.trim());
+      line = ch;
+      used = weight;
+      continue;
+    }
+    line += ch;
+    used += weight;
+  }
+  if (line.trim()) lines.push(line.trim());
+  if (!maxLines || lines.length <= maxLines) return lines.join('\n');
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = truncateByWeight(kept[maxLines - 1], maxLineWeight);
+  return kept.join('\n');
+}
+
+function budgetText(value, { maxWeight = 80, maxLineWeight = maxWeight, maxLines = 1 } = {}) {
+  return truncateByWeight(wrapByWeight(value, maxLineWeight, maxLines), maxWeight);
+}
+
+function cardOverBudget(card, titleWeight, bodyWeight) {
+  return textWeight(card.title) > titleWeight || textWeight(card.body) > bodyWeight;
+}
+
 function normalizeLayout(layout) {
   const value = String(layout || '').trim();
-  const aliases = {
-    section_divider: 'section',
-    problem_cards: 'cards',
-    metric_cards: 'metrics',
-    three_stage_flow: 'flow',
-    risk_table: 'table',
-    comparison_table: 'table',
-    summary_next_steps: 'summary',
-    image: 'split',
-  };
-  return aliases[value] || value || 'summary';
+  return value || 'summary';
 }
 
 function cardsFrom(slide) {
   const c = contentOf(slide);
-  const raw = c.cards || c.problems || c.steps || c.items || [];
+  const raw = c.cards || c.steps || [];
   return Array.isArray(raw) ? raw.map((item) => ({
     title: cleanText(item?.title || item?.label || item?.name),
     body: cleanText(item?.body || item?.description || item?.text || item?.note),
@@ -131,7 +181,7 @@ function cardsFrom(slide) {
 }
 
 function metricsFrom(slide) {
-  const raw = contentOf(slide).metrics || contentOf(slide).items || [];
+  const raw = contentOf(slide).metrics || [];
   return Array.isArray(raw) ? raw.map((item) => ({
     label: cleanText(item?.label || item?.title),
     value: cleanText(item?.value),
@@ -140,7 +190,7 @@ function metricsFrom(slide) {
 }
 
 function eventsFrom(slide) {
-  const raw = contentOf(slide).events || contentOf(slide).items || [];
+  const raw = contentOf(slide).events || [];
   return Array.isArray(raw) ? raw.map((item) => ({
     date: cleanText(item?.date || item?.time || item?.phase),
     title: cleanText(item?.title || item?.label),
@@ -222,8 +272,8 @@ function renderCover(pptxSlide, deck, spec, theme, index, total, assetRoot) {
   pptxSlide.addShape('rect', { x: 0, y: 0, w: SLIDE_W, h: SLIDE_H, fill: { color: theme.coverBg }, line: { transparency: 100 } });
   addHeroImage(pptxSlide, deck, spec, assetRoot, 7.0, 0.55, 5.55, 3.55);
   addText(pptxSlide, c.kicker || spec.kicker || 'Generated presentation', { x: 0.75, y: 0.85, w: 5.6, h: 0.32, fontSize: 11, color: theme.accent, bold: true, charSpace: 1.1 }, theme);
-  addText(pptxSlide, spec.title || deck.title, { x: 0.75, y: 1.55, w: 6.1, h: 1.35, fontSize: 34, bold: true, color: theme.coverTitle, fit: 'shrink' }, theme);
-  addText(pptxSlide, c.subtitle || deck.subtitle, { x: 0.78, y: 3.06, w: 5.9, h: 0.75, fontSize: 15, color: theme.coverSubtitle, fit: 'shrink' }, theme);
+  addText(pptxSlide, budgetText(spec.title || deck.title, { maxWeight: 52, maxLineWeight: 28, maxLines: 2 }), { x: 0.75, y: 1.55, w: 6.1, h: 1.35, fontSize: 34, bold: true, color: theme.coverTitle, valign: 'top' }, theme);
+  addText(pptxSlide, budgetText(c.subtitle || deck.subtitle, { maxWeight: 72, maxLineWeight: 36, maxLines: 2 }), { x: 0.78, y: 3.06, w: 5.9, h: 0.75, fontSize: 15, color: theme.coverSubtitle, valign: 'top' }, theme);
   pptxSlide.addShape('line', { x: 0.78, y: 4.22, w: 3.8, h: 0, line: { color: theme.accent, width: 2 } });
   addText(pptxSlide, c.owner || c.audience || '', { x: 0.78, y: 4.52, w: 4.8, h: 0.55, fontSize: 11, color: theme.coverMuted }, theme);
   addFooter(pptxSlide, index, total, theme, theme.coverMuted);
@@ -233,15 +283,31 @@ function renderCards(slide, spec, theme, index, total) {
   slide.background = { color: theme.background };
   addTitle(slide, spec.title, theme);
   const cards = cardsFrom(spec);
-  const positions = [[0.75, 1.45], [4.65, 1.45], [8.55, 1.45], [0.75, 3.7], [4.65, 3.7], [8.55, 3.7]];
+  if (cards.length > 4 || cards.some((card) => cardOverBudget(card, 28, 84))) {
+    renderCardsAsTable(slide, cards, theme);
+    addFooter(slide, index, total, theme);
+    return;
+  }
+  const positions = cards.length <= 2
+    ? [[1.2, 1.65], [7.0, 1.65]]
+    : [[0.75, 1.45], [4.65, 1.45], [8.55, 1.45], [0.75, 3.85]];
   const surfaceText = readableOn(theme.surface, theme.text);
-  cards.slice(0, 6).forEach((card, i) => {
+  cards.slice(0, 4).forEach((card, i) => {
     const [x, y] = positions[i];
-    slide.addShape('roundRect', { x, y, w: 3.35, h: 1.55, rectRadius: 0.06, fill: { color: theme.surface }, line: { color: i % 2 ? theme.accent2 : theme.accent, transparency: 10 } });
-    addText(slide, card.title, { x: x + 0.18, y: y + 0.18, w: 2.95, h: 0.35, fontSize: 13, bold: true, color: i % 2 ? theme.accent2 : theme.accent }, theme);
-    addText(slide, card.body, { x: x + 0.18, y: y + 0.62, w: 2.95, h: 0.78, fontSize: 10.5, color: surfaceText, fit: 'shrink', valign: 'top' }, theme);
+    const w = cards.length <= 2 ? 5.15 : 3.35;
+    slide.addShape('roundRect', { x, y, w, h: 1.85, rectRadius: 0.06, fill: { color: theme.surface }, line: { color: i % 2 ? theme.accent2 : theme.accent, transparency: 10 } });
+    addText(slide, budgetText(card.title, { maxWeight: 28, maxLineWeight: 18, maxLines: 2 }), { x: x + 0.18, y: y + 0.18, w: w - 0.36, h: 0.56, fontSize: 12.2, bold: true, color: i % 2 ? theme.accent2 : theme.accent, valign: 'top' }, theme);
+    addText(slide, budgetText(card.body, { maxWeight: 84, maxLineWeight: cards.length <= 2 ? 44 : 24, maxLines: 3 }), { x: x + 0.18, y: y + 0.86, w: w - 0.36, h: 0.76, fontSize: 9.8, color: surfaceText, valign: 'top' }, theme);
   });
   addFooter(slide, index, total, theme);
+}
+
+function renderCardsAsTable(slide, cards, theme) {
+  const rows = cards.slice(0, 6).map((card) => [
+    budgetText(card.title, { maxWeight: 26, maxLineWeight: 18, maxLines: 2 }),
+    budgetText(card.body, { maxWeight: 92, maxLineWeight: 56, maxLines: 2 }),
+  ]);
+  renderSimpleTable(slide, ['Item', 'Detail'], rows, theme, { y: 1.35, firstColW: 3.25 });
 }
 
 function renderMetrics(slide, deck, spec, theme, index, total, assetRoot) {
@@ -263,6 +329,11 @@ function renderFlow(slide, spec, theme, index, total) {
   slide.background = { color: theme.background };
   addTitle(slide, spec.title, theme);
   const steps = cardsFrom(spec);
+  if (steps.length > 4 || steps.some((step) => cardOverBudget(step, 24, 52))) {
+    renderFlowAsTable(slide, steps, theme);
+    addFooter(slide, index, total, theme);
+    return;
+  }
   const count = Math.max(1, Math.min(steps.length, 5));
   const gap = 0.23;
   const w = Math.min(2.15, (11.7 - (count - 1) * gap) / count);
@@ -271,13 +342,21 @@ function renderFlow(slide, spec, theme, index, total) {
     const active = i === Number(spec.visual?.highlightIndex ?? -1);
     const fill = active ? theme.accent : theme.surface;
     const color = active ? 'FFFFFF' : theme.text;
-    slide.addShape('roundRect', { x, y: 2.1, w, h: 1.15, rectRadius: 0.06, fill: { color: fill }, line: { color: active ? theme.accent : 'CBD5E1' } });
-    addText(slide, step.title, { x: x + 0.1, y: 2.3, w: w - 0.2, h: 0.38, fontSize: 11.2, bold: true, color, align: 'center' }, theme);
-    addText(slide, step.body, { x: x + 0.12, y: 2.75, w: w - 0.24, h: 0.36, fontSize: 8.7, color, align: 'center' }, theme);
-    if (i < count - 1) addText(slide, '→', { x: x + w + 0.02, y: 2.45, w: gap + 0.12, h: 0.3, fontSize: 16, color: theme.accent, align: 'center' }, theme);
+    slide.addShape('roundRect', { x, y: 2.0, w, h: 1.45, rectRadius: 0.06, fill: { color: fill }, line: { color: active ? theme.accent : 'CBD5E1' } });
+    addText(slide, budgetText(step.title, { maxWeight: 24, maxLineWeight: 14, maxLines: 2 }), { x: x + 0.1, y: 2.2, w: w - 0.2, h: 0.48, fontSize: 10.4, bold: true, color, align: 'center', valign: 'top' }, theme);
+    addText(slide, budgetText(step.body, { maxWeight: 52, maxLineWeight: 18, maxLines: 2 }), { x: x + 0.12, y: 2.82, w: w - 0.24, h: 0.42, fontSize: 8.3, color, align: 'center', valign: 'top' }, theme);
+    if (i < count - 1) addText(slide, '->', { x: x + w + 0.02, y: 2.5, w: gap + 0.12, h: 0.3, fontSize: 13, color: theme.accent, align: 'center' }, theme);
   });
-  renderTextPanel(slide, '关键说明', fallbackLines(spec).join('\n'), theme, 0.85, 4.35, 11.6, 1.1);
+  renderTextPanel(slide, 'Key notes', fallbackLines(spec).slice(0, 3).join('\n'), theme, 0.85, 4.35, 11.6, 1.1);
   addFooter(slide, index, total, theme);
+}
+
+function renderFlowAsTable(slide, steps, theme) {
+  const rows = steps.slice(0, 6).map((step, i) => [
+    `${i + 1}. ${budgetText(step.title || `Step ${i + 1}`, { maxWeight: 28, maxLineWeight: 20, maxLines: 2 })}`,
+    budgetText(step.body, { maxWeight: 88, maxLineWeight: 54, maxLines: 2 }),
+  ]);
+  renderSimpleTable(slide, ['Step', 'Focus'], rows, theme, { y: 1.35, firstColW: 3.55 });
 }
 
 function renderTable(slide, spec, theme, index, total) {
@@ -285,20 +364,32 @@ function renderTable(slide, spec, theme, index, total) {
   addTitle(slide, spec.title, theme);
   const columns = contentOf(spec).columns || [];
   const rows = rowsFrom(spec);
-  const colCount = Math.max(1, Math.min(columns.length || (rows[0] || []).length || 2, 4));
-  const w = 11.4 / colCount;
+  renderSimpleTable(slide, columns, rows, theme, { y: 1.35 });
+  addFooter(slide, index, total, theme);
+}
+
+function renderSimpleTable(slide, columns, rows, theme, options = {}) {
+  const allRows = [columns, ...rows].filter((row) => Array.isArray(row) && row.length).slice(0, 7);
+  if (!allRows.length) return;
+  const colCount = Math.max(1, Math.min(allRows[0].length || 2, 4));
   const startX = 0.85;
-  let y = 1.35;
-  [columns, ...rows].filter((row) => row.length).slice(0, 7).forEach((row, r) => {
+  const totalW = 11.4;
+  const firstColW = Math.min(options.firstColW || (totalW / colCount), totalW - 2.0);
+  const otherW = colCount > 1 ? (totalW - firstColW) / (colCount - 1) : totalW;
+  let y = options.y || 1.35;
+  allRows.forEach((row, r) => {
     const fill = r === 0 ? theme.accent : theme.surface;
     const textColor = r === 0 ? readableOn(theme.accent, 'FFFFFF') : theme.text;
+    let x = startX;
     for (let c = 0; c < colCount; c += 1) {
-      slide.addShape('roundRect', { x: startX + c * w, y, w: w - 0.05, h: 0.62, rectRadius: 0.03, fill: { color: fill }, line: { color: 'CBD5E1' } });
-      addText(slide, row[c] || '', { x: startX + c * w + 0.08, y: y + 0.13, w: w - 0.22, h: 0.32, fontSize: r === 0 ? 10.8 : 9.5, bold: r === 0, color: textColor, fit: 'shrink' }, theme);
+      const w = c === 0 && colCount > 1 ? firstColW : otherW;
+      const maxLineWeight = c === 0 ? 26 : Math.max(32, Math.floor(w * 15));
+      slide.addShape('roundRect', { x, y, w: w - 0.05, h: 0.68, rectRadius: 0.03, fill: { color: fill }, line: { color: 'CBD5E1' } });
+      addText(slide, budgetText(row[c] || '', { maxWeight: maxLineWeight * 2, maxLineWeight, maxLines: 2 }), { x: x + 0.08, y: y + 0.1, w: w - 0.22, h: 0.44, fontSize: r === 0 ? 10.3 : 8.8, bold: r === 0, color: textColor, valign: 'top' }, theme);
+      x += w;
     }
-    y += 0.72;
+    y += 0.76;
   });
-  addFooter(slide, index, total, theme);
 }
 
 function renderTimeline(slide, spec, theme, index, total) {
@@ -310,8 +401,8 @@ function renderTimeline(slide, spec, theme, index, total) {
     slide.addShape('ellipse', { x, y: 2.0, w: 0.5, h: 0.5, fill: { color: i % 2 ? theme.accent2 : theme.accent }, line: { transparency: 100 } });
     if (i < events.length - 1) slide.addShape('line', { x: x + 0.5, y: 2.25, w: 1.85, h: 0, line: { color: 'CBD5E1', width: 2 } });
     addText(slide, event.date, { x: x - 0.1, y: 1.55, w: 1.2, h: 0.25, fontSize: 9, color: theme.muted, bold: true }, theme);
-    addText(slide, event.title, { x: x - 0.05, y: 2.75, w: 2.05, h: 0.33, fontSize: 11.5, color: theme.text, bold: true }, theme);
-    addText(slide, event.body, { x: x - 0.05, y: 3.18, w: 2.05, h: 0.85, fontSize: 9, color: theme.text, fit: 'shrink' }, theme);
+    addText(slide, budgetText(event.title, { maxWeight: 24, maxLineWeight: 16, maxLines: 2 }), { x: x - 0.05, y: 2.75, w: 2.05, h: 0.44, fontSize: 10.4, color: theme.text, bold: true, valign: 'top' }, theme);
+    addText(slide, budgetText(event.body, { maxWeight: 58, maxLineWeight: 18, maxLines: 3 }), { x: x - 0.05, y: 3.26, w: 2.05, h: 0.72, fontSize: 8.5, color: theme.text, valign: 'top' }, theme);
   });
   addFooter(slide, index, total, theme);
 }
@@ -320,7 +411,7 @@ function renderTextPanel(slide, title, body, theme, x, y, w, h) {
   if (!body && !title) return;
   slide.addShape('roundRect', { x, y, w, h, rectRadius: 0.05, fill: { color: theme.surface }, line: { color: 'CBD5E1' } });
   addText(slide, title, { x: x + 0.18, y: y + 0.12, w: w - 0.36, h: 0.25, fontSize: 11, bold: true, color: theme.accent }, theme);
-  addText(slide, body, { x: x + 0.18, y: y + 0.42, w: w - 0.36, h: h - 0.52, fontSize: 9.5, color: theme.text, valign: 'top' }, theme);
+  addText(slide, budgetText(body, { maxWeight: Math.floor(w * 34), maxLineWeight: Math.floor(w * 18), maxLines: Math.max(1, Math.floor((h - 0.52) / 0.22)) }), { x: x + 0.18, y: y + 0.42, w: w - 0.36, h: h - 0.52, fontSize: 9.5, color: theme.text, valign: 'top' }, theme);
 }
 
 function renderSummary(slide, spec, theme, index, total) {
@@ -342,7 +433,7 @@ function renderSplit(slide, deck, spec, theme, index, total, assetRoot) {
   lines.slice(0, 6).forEach((line, i) => {
     const y = 1.35 + i * 0.72;
     slide.addShape('ellipse', { x: 0.8, y: y + 0.04, w: 0.26, h: 0.26, fill: { color: i % 2 ? theme.accent2 : theme.accent }, line: { transparency: 100 } });
-    addText(slide, line, { x: 1.25, y, w: hasImage ? 5.4 : 10.9, h: 0.48, fontSize: 13.2, color: theme.text, fit: 'shrink' }, theme);
+    addText(slide, budgetText(line, { maxWeight: hasImage ? 46 : 88, maxLineWeight: hasImage ? 46 : 88, maxLines: 1 }), { x: 1.25, y, w: hasImage ? 5.4 : 10.9, h: 0.48, fontSize: 13.2, color: theme.text }, theme);
   });
   if (!lines.length) renderTextPanel(slide, '', contentOf(spec).subtitle || spec.subtitle || '', theme, 0.85, 1.45, hasImage ? 5.4 : 11.4, 4.3);
   addFooter(slide, index, total, theme);
@@ -367,7 +458,7 @@ function renderDeck(deck, output, assetRoot) {
     else if (layout === 'flow') renderFlow(slide, spec, theme, i + 1, slides.length);
     else if (layout === 'timeline') renderTimeline(slide, spec, theme, i + 1, slides.length);
     else if (layout === 'table') renderTable(slide, spec, theme, i + 1, slides.length);
-    else if (layout === 'split' || layout === 'section') renderSplit(slide, deck, spec, theme, i + 1, slides.length, assetRoot);
+    else if (layout === 'split') renderSplit(slide, deck, spec, theme, i + 1, slides.length, assetRoot);
     else renderSummary(slide, spec, theme, i + 1, slides.length);
   });
   return pptx.writeFile({ fileName: output });

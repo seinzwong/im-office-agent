@@ -135,7 +135,7 @@ def _publish_doc_with_lark_cli_user(ir: dict, options: dict, config: dict, warni
             "docs",
             "+create",
             "--title",
-            ir["meta"]["title"],
+            _artifact_file_name(ir),
             "--folder-token",
             folder_token,
             "--markdown",
@@ -316,7 +316,12 @@ def _resolve_document_id(client: FeishuDocClient, ir: dict, options: dict, confi
     if not folder_token:
         warnings.append("FEISHU_DOC_FOLDER_TOKEN missing.")
         return ""
-    return _extract_document_id(client.create_document(ir["meta"]["title"], folder_token))
+    return _extract_document_id(client.create_document(_artifact_file_name(ir), folder_token))
+
+
+def _artifact_file_name(ir: dict) -> str:
+    meta = ir.get("meta") if isinstance(ir.get("meta"), dict) else {}
+    return str(meta.get("file_name") or meta.get("title") or "Generated Artifact").strip() or "Generated Artifact"
 
 
 def _block_to_doc_blocks(block: dict) -> list[dict]:

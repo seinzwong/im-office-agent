@@ -94,6 +94,8 @@ def _target_options(
     }
     if target == "ppt" and isinstance(options.get("slide_draft"), dict):
         merged["slide_draft"] = options["slide_draft"]
+    if target == "board" and isinstance(options.get("board_ir"), dict):
+        merged["board_ir"] = options["board_ir"]
     if folder_token:
         merged["folder_token"] = folder_token
     for key in ("user_access_token", "tenant_access_token", "authorized_user_id"):

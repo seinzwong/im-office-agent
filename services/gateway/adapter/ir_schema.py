@@ -26,7 +26,7 @@ DEFAULT_THEME: dict[str, str] = {
     "muted": "#64748B",
     "success": "#16A34A",
     "warning": "#F97316",
-    "fontFace": "Aptos",
+    "fontFace": "Microsoft YaHei",
 }
 
 
@@ -40,6 +40,7 @@ def ensure_ir_defaults(ir: dict) -> dict:
         meta = {}
         out["meta"] = meta
     meta.setdefault("title", "Generated Artifact")
+    meta.setdefault("file_name", _safe_output_name(str(meta.get("title") or "Generated Artifact")))
     meta.setdefault("subtitle", "")
     meta.setdefault("owner", "Agent")
     meta.setdefault("date", date.today().isoformat())
@@ -100,6 +101,8 @@ def validate_ir(ir: dict) -> list[str]:
     meta = ir.get("meta")
     if not isinstance(meta, dict) or not str(meta.get("title") or "").strip():
         errors.append("meta.title is required.")
+    elif not str(meta.get("file_name") or "").strip():
+        errors.append("meta.file_name is required.")
     blocks = ir.get("blocks")
     if not isinstance(blocks, list):
         errors.append("blocks must be an array.")
@@ -213,6 +216,14 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _safe_output_name(value: str) -> str:
+    import re
+
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1F]+', "_", str(value or "").strip())
+    safe = re.sub(r"\s+", " ", safe).strip(" ._")
+    return safe[:60] or "Generated Artifact"
 
 
 def _normalize_cards(value: Any) -> list[dict[str, Any]]:

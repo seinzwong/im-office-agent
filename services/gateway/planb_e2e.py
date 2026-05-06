@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from services.agent.agents import (
+    generate_board_ir_from_content_ir,
     generate_content_ir_from_messages,
     generate_slide_draft_from_content_ir,
 )
@@ -37,20 +38,25 @@ def run_planb_e2e(raw_request: dict) -> dict:
     options = dict(request.get("options") or {})
     targets = _target_outputs(options)
     content_ir = None
+    board_ir = None
     slide_draft = None
     ir = _minimal_ir_from_request(request)
 
-    log.info("planb e2e content_ir started targets=%s", targets)
-    content_result = generate_content_ir_from_messages(request)
-    warnings.extend(content_result.get("warnings") or [])
-    if content_result.get("ok") is not True:
-        return _finish(
-            "generate_content_ir",
-            _error_from_result(content_result, default_code="CONTENT_IR_FAILED"),
-            warnings,
-            started_at,
-        )
-    content_ir = content_result.get("content_ir") or {}
+    if isinstance(options.get("content_ir"), dict):
+        content_ir = options["content_ir"]
+        warnings.append("Reused ContentIR from sidecar store.")
+    else:
+        log.info("planb e2e content_ir started targets=%s", targets)
+        content_result = generate_content_ir_from_messages(request)
+        warnings.extend(content_result.get("warnings") or [])
+        if content_result.get("ok") is not True:
+            return _finish(
+                "generate_content_ir",
+                _error_from_result(content_result, default_code="CONTENT_IR_FAILED"),
+                warnings,
+                started_at,
+            )
+        content_ir = content_result.get("content_ir") or {}
     if "ppt" in targets:
         log.info("planb e2e slide_draft started")
         slide_result = generate_slide_draft_from_content_ir(content_ir, options.get("ppt") or {})
@@ -71,6 +77,31 @@ def run_planb_e2e(raw_request: dict) -> dict:
             )
         slide_draft = slide_result.get("slide_draft") or {}
         options["slide_draft"] = slide_draft
+    if "board" in targets:
+        if isinstance(options.get("board_ir"), dict):
+            board_ir = options["board_ir"]
+            warnings.append("Reused BoardIR from request options.")
+        else:
+            log.info("planb e2e board_ir started")
+            board_result = generate_board_ir_from_content_ir(content_ir, options.get("board") or {})
+            warnings.extend(board_result.get("warnings") or [])
+            if board_result.get("ok") is not True:
+                return _finish(
+                    "generate_board_ir",
+                    _error_from_result(board_result, default_code="BOARD_IR_FAILED"),
+                    warnings,
+                    started_at,
+                    extra={
+                        "request": _request_summary(request),
+                        "ir": ir,
+                        "content_ir": content_ir,
+                        "board_ir": None,
+                        "slide_draft": slide_draft,
+                        "publish_result": {},
+                    },
+                )
+            board_ir = board_result.get("board_ir") or {}
+        options["board_ir"] = board_ir
     log.info("planb e2e publish_ir started targets=%s", targets)
     publish_result = publish_ir(ir, publish_context, options)
     warnings.extend(publish_result.get("warnings") or [])
@@ -84,6 +115,7 @@ def run_planb_e2e(raw_request: dict) -> dict:
                 "request": _request_summary(request),
                 "ir": ir,
                 "content_ir": content_ir,
+                "board_ir": board_ir,
                 "slide_draft": slide_draft,
                 "publish_result": publish_result.get("publish_result") or {},
             },
@@ -98,6 +130,7 @@ def run_planb_e2e(raw_request: dict) -> dict:
             "request": _request_summary(request),
             "ir": ir,
             "content_ir": content_ir,
+            "board_ir": board_ir,
             "slide_draft": slide_draft,
             "publish_result": publish_result.get("publish_result") or {},
         },

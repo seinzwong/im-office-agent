@@ -167,6 +167,10 @@ def _normalize_options(raw: JsonDict, task: JsonDict, warnings: list[str]) -> Js
         value = source.get(key)
         if isinstance(value, dict):
             normalized[key] = value
+    if isinstance(source.get("content_ir"), dict):
+        normalized["content_ir"] = source["content_ir"]
+    if isinstance(source.get("board_ir"), dict):
+        normalized["board_ir"] = source["board_ir"]
     return normalized
 
 

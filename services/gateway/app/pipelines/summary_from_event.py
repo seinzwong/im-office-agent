@@ -5,10 +5,12 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 
+from services.agent.agents import generate_content_ir_from_messages
 from services.gateway.adapter import publish_ir
 
 from ..agents.client import AgentsClient
 from ..config import get_settings
+from ..content_ir_store import save_content_ir_for_file_token
 from ..feishu_openapi import (
     docx_create_in_folder_with_plain_text,
     docx_open_url,
@@ -136,6 +138,7 @@ def run_summary_command(
         open_url,
     )
     _safe_reply(s, source_message_id, reply_text)
+    _save_summary_content_ir(document_id, open_url, messages, chat_id, minutes)
     return {
         "ok": True,
         "chat_id": chat_id,
@@ -145,6 +148,29 @@ def run_summary_command(
         "time_window_end_unix": end_unix,
         "open_url": open_url,
     }
+
+
+def _save_summary_content_ir(document_id: str, open_url: str, messages: list[dict], chat_id: str, minutes: int | None) -> None:
+    if not document_id:
+        return
+    request = {
+        "task": {
+            "task_id": f"summary_{chat_id}",
+            "title": f"Chat summary {chat_id}",
+            "goal": f"Summarize the selected chat window ({minutes or 60} minutes).",
+            "audience": "Management and business team",
+            "deliverables": ["doc"],
+        },
+        "messages": messages,
+        "options": {"target_outputs": ["doc"], "dry_run": True, "language": "zh-CN"},
+    }
+    try:
+        result = generate_content_ir_from_messages(request)
+        content_ir = result.get("content_ir") if result.get("ok") is True else None
+        if isinstance(content_ir, dict):
+            save_content_ir_for_file_token(document_id, content_ir, source_title=request["task"]["title"], source_url=open_url)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("content_ir sidecar save failed: %s", exc)
 
 
 def _invoke_summary_ir(

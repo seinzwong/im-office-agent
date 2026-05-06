@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -19,7 +20,13 @@ from services.gateway.adapter.feishu_doc_adapter import (
     feishu_doc_blocks_to_openapi_children,
     ir_to_feishu_doc_blocks,
 )
+from services.gateway.adapter.feishu_board_adapter import ir_to_feishu_board_draft
+from services.gateway.adapter.feishu_board_adapter import publish_ir_to_feishu_board
 from services.gateway.adapter.ir_schema import ensure_ir_defaults, validate_ir
+from services.gateway.adapter.ppt_adapter import publish_ir_to_ppt, slide_draft_to_ppt_draft
+from services.gateway.app import content_ir_store
+from services.gateway import planb_e2e
+from services.agent.agents import validate_slide_draft
 
 
 def _client() -> TestClient:
@@ -383,6 +390,130 @@ class FeishuDocAdapterTests(unittest.TestCase):
         self.assertIn("| Task | Owner |", posts[-1]["json"]["children"][0]["code"]["elements"][0]["text_run"]["content"])
 
 
+class PptSchemaAndAdapterTests(unittest.TestCase):
+    def test_slide_draft_rejects_unknown_fields_and_layout_mismatch(self) -> None:
+        draft = _slide_draft()
+        draft["slides"][0]["layout"] = "cards"
+        draft["slides"][0]["content"] = {"cards": [{"title": "A", "body": "B"}], "items": []}
+        errors = validate_slide_draft(draft)
+        self.assertIn("slides[0].content.items is not supported for layout cards.", errors)
+
+        draft = _slide_draft()
+        draft["slides"][0]["layout"] = "cards"
+        draft["slides"][0]["content"] = {"steps": [{"title": "A", "body": "B"}]}
+        errors = validate_slide_draft(draft)
+        self.assertIn("slides[0].content.steps is not supported for layout cards.", errors)
+        self.assertIn("slides[0].content does not match layout schema for cards.", errors)
+
+    def test_ppt_adapter_rejects_xml_renderer_and_does_not_fallback(self) -> None:
+        result = publish_ir_to_ppt(_ir(), {"slide_draft": _slide_draft(), "renderer": "xml", "dry_run": True})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "UNSUPPORTED_PPT_RENDERER")
+
+        with patch("services.gateway.adapter.ppt_adapter._render_pptx_with_node", return_value={"ok": False, "stderr": "boom"}):
+            result = publish_ir_to_ppt(_ir(), {"slide_draft": _slide_draft(), "dry_run": True})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "PPTX_RENDER_FAILED")
+
+    def test_llm_file_name_is_used_for_board_and_ppt(self) -> None:
+        ir = ensure_ir_defaults({**_ir(), "meta": {"title": "Visible Title", "file_name": "LLM File Name"}})
+        self.assertEqual(ir_to_feishu_board_draft(ir)["metadata"]["title"], "LLM File Name")
+
+        draft = _slide_draft()
+        draft["file_name"] = "PPT LLM Name"
+        self.assertEqual(slide_draft_to_ppt_draft(draft)["file_name"], "PPT LLM Name")
+
+    def test_content_ir_sidecar_round_trip_and_planb_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(content_ir_store, "content_ir_store_dir", return_value=Path(tmp)):
+                saved = content_ir_store.save_content_ir_for_file_token("doc/token:1", {"title": "IR"}, source_title="Doc")
+                self.assertTrue(saved.is_file())
+                self.assertEqual(content_ir_store.load_content_ir_for_file_token("doc/token:1"), {"title": "IR"})
+
+        request = {
+            "task": {"title": "Deck", "deliverables": ["ppt"]},
+            "messages": [{"text": "Build slides", "sender": "u"}],
+            "options": {"target_outputs": ["ppt"], "content_ir": {"title": "Stored IR"}},
+        }
+        with patch.object(planb_e2e, "generate_content_ir_from_messages") as generate_ir, patch.object(
+            planb_e2e, "generate_slide_draft_from_content_ir", return_value={"ok": True, "slide_draft": _slide_draft()}
+        ) as generate_slides, patch.object(planb_e2e, "publish_ir", return_value={"ok": True, "publish_result": {"ppt": {"ok": True}}}):
+            result = planb_e2e.run_planb_e2e(request)
+        self.assertTrue(result["ok"])
+        generate_ir.assert_not_called()
+        generate_slides.assert_called_once()
+
+    def test_planb_generates_board_ir_for_board_target(self) -> None:
+        request = {
+            "task": {"title": "Board", "deliverables": ["board"]},
+            "messages": [{"text": "Build board", "sender": "u"}],
+            "options": {"target_outputs": ["board"]},
+        }
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [{"id": "s1", "kind": "overview", "title": "Overview", "description": "", "accent": "", "items": ["a"], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []}],
+        }
+        with patch.object(planb_e2e, "generate_content_ir_from_messages", return_value={"ok": True, "content_ir": {"title": "C"}}), patch.object(
+            planb_e2e, "generate_board_ir_from_content_ir", return_value={"ok": True, "board_ir": board_ir}
+        ) as generate_board, patch.object(planb_e2e, "publish_ir", return_value={"ok": True, "publish_result": {"board": {"ok": True}}}) as publish:
+            result = planb_e2e.run_planb_e2e(request)
+        self.assertTrue(result["ok"])
+        generate_board.assert_called_once()
+        self.assertEqual(publish.call_args.args[2]["board_ir"]["file_name"], "Board")
+
+    def test_planb_reuses_board_ir_from_options(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [{"id": "s1", "kind": "overview", "title": "Overview", "description": "", "accent": "", "items": ["a"], "nodes": [], "edges": [], "metrics": [], "columns": [], "rows": [], "events": []}],
+        }
+        request = {
+            "task": {"title": "Board", "deliverables": ["board"]},
+            "messages": [{"text": "Build board", "sender": "u"}],
+            "options": {"target_outputs": ["board"], "board_ir": board_ir},
+        }
+        with patch.object(planb_e2e, "generate_board_ir_from_content_ir") as generate_board, patch.object(
+            planb_e2e, "generate_content_ir_from_messages", return_value={"ok": True, "content_ir": {"title": "C"}}
+        ), patch.object(planb_e2e, "publish_ir", return_value={"ok": True, "publish_result": {"board": {"ok": True}}}):
+            result = planb_e2e.run_planb_e2e(request)
+        self.assertTrue(result["ok"])
+        generate_board.assert_not_called()
+
+    def test_board_adapter_dry_run_keeps_only_supported_timeline_fields(self) -> None:
+        board_ir = {
+            "title": "Board",
+            "file_name": "Board",
+            "subtitle": "S",
+            "theme": {"accent": "#2F6BFF", "accent2": "#7C3AED", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B"},
+            "sections": [
+                {
+                    "id": "t1",
+                    "kind": "timeline",
+                    "title": "Timeline",
+                    "description": "",
+                    "accent": "",
+                    "items": [],
+                    "nodes": [],
+                    "edges": [],
+                    "metrics": [],
+                    "columns": [],
+                    "rows": [],
+                    "events": [{"date": "W1", "title": "Kickoff", "body": "Do", "owner": "Alice", "status": "open"}],
+                }
+            ],
+        }
+        result = publish_ir_to_feishu_board(_ir(), {"dry_run": True, "board_ir": board_ir})
+        self.assertTrue(result["ok"])
+        dsl_text = result.get("whiteboard_dsl") or ""
+        self.assertNotIn("owner", dsl_text)
+        self.assertNotIn("status", dsl_text)
+
+
 def _settings(tmp: str, static_user_token: str = "") -> Settings:
     return Settings(
         gateway_public_base_url="https://gateway.example",
@@ -413,6 +544,25 @@ def _ir() -> dict:
         "schemaVersion": "0.2.0",
         "meta": {"title": "t"},
         "blocks": [{"id": "cover", "kind": "cover", "title": "t"}],
+    }
+
+
+def _slide_draft() -> dict:
+    return {
+        "title": "Deck",
+        "file_name": "Deck File",
+        "subtitle": "Subtitle",
+        "theme": {"fontFace": "Microsoft YaHei"},
+        "slides": [
+            {
+                "id": "s1",
+                "title": "Summary",
+                "layout": "summary",
+                "content": {"outcomes": ["Done"], "next_steps": ["Review"]},
+                "visual": {"highlightIndex": -1},
+                "speaker_notes": "",
+            }
+        ],
     }
 
 

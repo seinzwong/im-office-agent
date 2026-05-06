@@ -39,6 +39,8 @@ Rules:
 - blocks must be non-empty and use only these kinds: cover, split, flow,
   metrics, cards, table, timeline, image.
 - Return {"ir": {...}, "warnings": ["..."]}.
+- Set meta.file_name to a concise human-readable output file name without an
+  extension, summarized from the content.
 - Prefer readable, publishable blocks: use table for structured lists, cards
   for explanatory modules, timeline for ordered plans, and split for key
   conclusions.
@@ -84,19 +86,17 @@ solution presentation. Return JSON only.
 Rules:
 - Return {"slide_draft": {...}, "warnings": ["..."]}.
 - Do not invent new business facts beyond the ContentIR.
-- slide_draft must contain title, subtitle, theme, and slides.
+- slide_draft must contain title, file_name, subtitle, theme, and slides.
 - Each slide must contain id, title, layout, content, and speaker_notes.
 - Supported layouts: cover, split, flow, metrics, cards, table, timeline,
-  summary. Existing aliases section_divider, problem_cards, metric_cards,
-  three_stage_flow, risk_table, comparison_table, summary_next_steps are also
-  accepted.
+  summary. Do not output legacy layout aliases.
 - Every slide content must be non-empty.
-- section_divider may use an empty points array when the slide title itself is
+- split may use an empty points array when the slide title itself is
   the section message.
-- Use section_divider only for pure section breaks such as "Background",
-  "Solution", or "Plan". Do not use section_divider for substantive content
+- Use split only for pure section breaks such as "Background",
+  "Solution", or "Plan". Do not use split for substantive content
   such as decision points, key actions, risks, milestones, or recommendations;
-  use summary_next_steps, three_stage_flow, risk_table, timeline, or cards.
+  use summary, flow, table, timeline, or cards.
 - Do not use the same layout for 3 consecutive slides.
 - Produce 8 to 10 slides when enough content exists. Never produce more than
   10 slides.
@@ -111,39 +111,70 @@ Rules:
 - Choose readable font colors: cover_title should be "#FFFFFF",
   cover_subtitle "#E2E8F0", cover_muted "#CBD5E1"; body_title/body_text should
   be dark readable colors on theme.background, body_muted a readable muted gray.
+- Use theme.fontFace for the presentation font. Prefer "Microsoft YaHei" for
+  zh-CN decks unless the user explicitly requests another available font.
+- Keep slide copy short enough for PPT cards: slide titles <= 22 Chinese chars,
+  card/flow titles <= 14 Chinese chars, card bodies <= 36 Chinese chars, flow
+  bodies <= 24 Chinese chars, summary bullets <= 32 Chinese chars. Use tables
+  instead of cards/flow when items need longer descriptions.
+- Cards should contain at most 4 items. Flow should contain at most 4 steps.
+  If there are 5+ comparable items or long stage descriptions, choose table,
+  timeline, or summary instead.
 - Do not use dark body_text on dark cover_bg. Do not use white body_text on
   light normal pages.
 - Do not encode placeholder text such as "click to add body" or "点击可添加正文".
 - You may include slide.asset_key to request an available SVG/bitmap asset and
-  slide.visual for high-level intent only, for example {"tone":"executive",
-  "density":"balanced", "imagePlacement":"right", "highlightIndex":1}. Do not
-  output renderer coordinates, XML, or pptxgenjs option names.
+  slide.visual.highlightIndex to emphasize one flow step. Do not output
+  renderer coordinates, XML, or pptxgenjs option names.
+- For each slide content object, include only the fields used by that layout:
+  cover uses subtitle/kicker/owner/audience; split uses points; cards uses
+  cards; metrics uses metrics; flow uses steps; table uses columns/rows;
+  timeline uses events; summary uses next_steps/outcomes.
 
 SlideDraft schema:
 {
   "slide_draft": {
     "title": "string",
+    "file_name": "string",
     "subtitle": "string",
-    "theme": {"accent": "#2563EB", "accent2": "#0F766E", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B", "success": "#16A34A", "warning": "#F97316", "cover_bg": "#0F172A", "cover_title": "#FFFFFF", "cover_subtitle": "#E2E8F0", "cover_muted": "#CBD5E1", "body_title": "#0F172A", "body_text": "#0F172A", "body_muted": "#64748B"},
+    "theme": {"accent": "#2563EB", "accent2": "#0F766E", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B", "success": "#16A34A", "warning": "#F97316", "cover_bg": "#0F172A", "cover_title": "#FFFFFF", "cover_subtitle": "#E2E8F0", "cover_muted": "#CBD5E1", "body_title": "#0F172A", "body_text": "#0F172A", "body_muted": "#64748B", "fontFace": "Microsoft YaHei"},
     "slides": [
       {"id": "cover", "layout": "cover", "title": "string", "content": {"subtitle": "string", "kicker": "string"}, "speaker_notes": "string"},
-      {"id": "section", "layout": "section_divider", "title": "string", "content": {"points": ["string"]}, "speaker_notes": "string"},
-      {"id": "problems", "layout": "problem_cards", "title": "string", "content": {"problems": [{"title": "string", "body": "string"}]}, "speaker_notes": "string"},
-      {"id": "metrics", "layout": "metric_cards", "title": "string", "content": {"metrics": [{"label": "string", "value": "string", "note": "string"}]}, "speaker_notes": "string"},
-      {"id": "flow", "layout": "three_stage_flow", "title": "string", "content": {"steps": [{"title": "string", "body": "string"}]}, "speaker_notes": "string"},
+      {"id": "section", "layout": "split", "title": "string", "content": {"points": ["string"]}, "speaker_notes": "string"},
+      {"id": "problems", "layout": "cards", "title": "string", "content": {"cards": [{"title": "string", "body": "string"}]}, "speaker_notes": "string"},
+      {"id": "metrics", "layout": "metrics", "title": "string", "content": {"metrics": [{"label": "string", "value": "string", "note": "string"}]}, "speaker_notes": "string"},
+      {"id": "flow", "layout": "flow", "title": "string", "content": {"steps": [{"title": "string", "body": "string"}]}, "speaker_notes": "string"},
       {"id": "timeline", "layout": "timeline", "title": "string", "content": {"events": [{"date": "string", "title": "string", "body": "string"}]}, "speaker_notes": "string"},
-      {"id": "risks", "layout": "risk_table", "title": "string", "content": {"columns": ["Risk", "Impact", "Mitigation"], "rows": [["string", "string", "string"]]}, "speaker_notes": "string"},
-      {"id": "compare", "layout": "comparison_table", "title": "string", "content": {"columns": ["Dimension", "Before", "After"], "rows": [["string", "string", "string"]]}, "speaker_notes": "string"},
-      {"id": "next", "layout": "summary_next_steps", "title": "string", "content": {"outcomes": ["string"], "next_steps": ["string"]}, "speaker_notes": "string"}
+      {"id": "risks", "layout": "table", "title": "string", "content": {"columns": ["Risk", "Impact", "Mitigation"], "rows": [["string", "string", "string"]]}, "speaker_notes": "string"},
+      {"id": "next", "layout": "summary", "title": "string", "content": {"outcomes": ["string"], "next_steps": ["string"]}, "speaker_notes": "string"}
     ]
   },
   "warnings": []
 }
 
-Use exactly the content field names shown. Because structured output schema is
-strict, include all content keys on every slide; set fields that are not used by
-that slide layout to "" or [] as appropriate. Do not use aliases such as items,
-phases, roadmap, cards, bullets, headers, or milestones in SlideDraft.
+Use exactly the content field names shown. Do not include fields that are not
+consumed by the slide layout. Do not use aliases such as items, problems,
+phases, roadmap, bullets, headers, risks, comparisons, or milestones in
+SlideDraft.
+"""
+
+BOARD_IR_PROMPT = """You are the Board Agent in PlanB.
+
+Use the provided ContentIR to produce one BoardIR for a high-quality
+whiteboard. Return JSON only.
+
+Rules:
+- Return {"board_ir": {...}, "warnings": ["..."]}.
+- Do not invent new business facts beyond ContentIR.
+- BoardIR must contain title, file_name, subtitle, theme, and sections.
+- Board sections must express solution logic clearly:
+  background/problems -> goals/metrics -> main flow -> modules -> risks ->
+  timeline -> next steps.
+- Board is a spatial expression, not a document summary. Keep hierarchy clear.
+- Use only supported section kinds:
+  overview, flow, cards, metrics, table, timeline, summary.
+- Include only fields consumed by each kind. Do not output unknown fields.
+- Keep section text concise and scannable.
 """
 
 SLIDE_LAYOUTS = {
@@ -154,24 +185,10 @@ SLIDE_LAYOUTS = {
     "cards",
     "table",
     "summary",
-    "section_divider",
-    "problem_cards",
-    "metric_cards",
-    "three_stage_flow",
     "timeline",
-    "risk_table",
-    "comparison_table",
-    "summary_next_steps",
 }
 
-SLIDE_LAYOUT_ALIASES = {
-    "split": "section_divider",
-    "cards": "problem_cards",
-    "metrics": "metric_cards",
-    "flow": "three_stage_flow",
-    "table": "risk_table",
-    "summary": "summary_next_steps",
-}
+SLIDE_LAYOUT_ALIASES: dict[str, str] = {}
 
 CONTENT_IR_RESPONSE_SCHEMA = {
     "name": "planb_content_ir_response",
@@ -273,9 +290,10 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
                     "meta": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["title", "subtitle", "owner", "date", "audience"],
+                        "required": ["title", "file_name", "subtitle", "owner", "date", "audience"],
                         "properties": {
                             "title": {"type": "string"},
+                            "file_name": {"type": "string"},
                             "subtitle": {"type": "string"},
                             "owner": {"type": "string"},
                             "date": {"type": "string"},
@@ -445,17 +463,19 @@ ARTIFACT_IR_RESPONSE_SCHEMA = {
 }
 
 SLIDE_CONTENT_PROPERTIES = {
-    "subtitle": {"type": "string"},
-    "kicker": {"type": "string"},
-    "points": {"type": "array", "items": {"type": "string"}},
-    "problems": {"type": "array", "items": {"$ref": "#/$defs/card"}},
-    "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
-    "steps": {"type": "array", "items": {"$ref": "#/$defs/card"}},
-    "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
-    "columns": {"type": "array", "items": {"type": "string"}},
-    "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-    "outcomes": {"type": "array", "items": {"type": "string"}},
-    "next_steps": {"type": "array", "items": {"type": "string"}},
+    "subtitle": {"type": "string", "description": "Cover subtitle. Use only on cover slides."},
+    "kicker": {"type": "string", "description": "Short cover eyebrow or audience label. Use only on cover slides."},
+    "owner": {"type": "string", "description": "Optional cover owner or source label. Use only on cover slides."},
+    "audience": {"type": "string", "description": "Optional cover audience. Use only on cover slides."},
+    "points": {"type": "array", "description": "Short bullet lines for split slides only.", "items": {"type": "string", "description": "One concise bullet."}},
+    "cards": {"type": "array", "description": "Cards for cards slides only. Keep at most 4 items.", "items": {"$ref": "#/$defs/card"}},
+    "metrics": {"type": "array", "description": "Metric cards for metrics slides only. Keep at most 4 items.", "items": {"$ref": "#/$defs/metric"}},
+    "steps": {"type": "array", "description": "Process steps for flow slides only. Keep at most 4 steps.", "items": {"$ref": "#/$defs/card"}},
+    "events": {"type": "array", "description": "Timeline events for timeline slides only. Keep at most 5 events.", "items": {"$ref": "#/$defs/event"}},
+    "columns": {"type": "array", "description": "Table headers for table slides only.", "items": {"type": "string", "description": "Concise table header."}},
+    "rows": {"type": "array", "description": "Table rows for table slides only; every row must match columns length.", "items": {"type": "array", "items": {"type": "string", "description": "Table cell text."}}},
+    "outcomes": {"type": "array", "description": "Expected outcomes for summary slides only.", "items": {"type": "string", "description": "One concise outcome."}},
+    "next_steps": {"type": "array", "description": "Next actions for summary slides only.", "items": {"type": "string", "description": "One concise next step."}},
 }
 
 
@@ -475,6 +495,7 @@ THEME_COLOR_FIELDS = [
     "body_title",
     "body_text",
     "body_muted",
+    "fontFace",
 ]
 
 
@@ -488,33 +509,39 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
             "warnings": {"type": "array", "items": {"type": "string"}},
             "slide_draft": {
                 "type": "object",
+                "description": "Renderer-ready PPT deck draft for pptxgenjs.",
                 "additionalProperties": False,
-                "required": ["title", "subtitle", "theme", "slides"],
+                "required": ["title", "file_name", "subtitle", "theme", "slides"],
                 "properties": {
-                    "title": {"type": "string"},
-                    "subtitle": {"type": "string"},
+                    "title": {"type": "string", "description": "Presentation title shown on the cover and document metadata."},
+                    "file_name": {"type": "string", "description": "Concise human-readable output file name without extension, summarized from the content."},
+                    "subtitle": {"type": "string", "description": "Presentation subtitle or one-sentence context."},
                     "theme": {
                         "type": "object",
+                        "description": "Visual theme used by the pptx renderer.",
                         "additionalProperties": False,
                         "required": THEME_COLOR_FIELDS,
                         "properties": {
-                            field: {"type": "string"}
+                            field: {"type": "string", "description": f"Theme field {field}."}
                             for field in THEME_COLOR_FIELDS
                         },
                     },
                     "slides": {
                         "type": "array",
+                        "description": "Ordered deck slides.",
                         "minItems": 1,
                         "maxItems": 10,
                         "items": {
                             "type": "object",
+                            "description": "One slide using a renderer-supported layout.",
                             "additionalProperties": False,
                             "required": ["id", "title", "layout", "content", "speaker_notes"],
                             "properties": {
-                                "id": {"type": "string"},
-                                "title": {"type": "string"},
+                                "id": {"type": "string", "description": "Stable lowercase slide id unique within the deck."},
+                                "title": {"type": "string", "description": "Short slide title, ideally <= 22 Chinese characters."},
                                 "layout": {
                                     "type": "string",
+                                    "description": "Renderer layout. Use only canonical layout names, never legacy aliases.",
                                     "enum": [
                                         "cover",
                                         "split",
@@ -523,33 +550,24 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
                                         "cards",
                                         "table",
                                         "summary",
-                                        "section_divider",
-                                        "problem_cards",
-                                        "metric_cards",
-                                        "three_stage_flow",
                                         "timeline",
-                                        "risk_table",
-                                        "comparison_table",
-                                        "summary_next_steps",
                                     ],
                                 },
-                                "asset_key": {"type": "string"},
+                                "asset_key": {"type": "string", "description": "Optional key into slide_draft.assets for an image; empty when no image is needed."},
                                 "visual": {
                                     "type": "object",
+                                    "description": "Optional renderer hint. Only highlightIndex is consumed.",
                                     "additionalProperties": False,
-                                    "required": ["tone", "density", "imagePlacement", "highlightIndex"],
+                                    "required": ["highlightIndex"],
                                     "properties": {
-                                        "tone": {"type": "string"},
-                                        "density": {"type": "string"},
-                                        "imagePlacement": {"type": "string"},
-                                        "highlightIndex": {"type": "integer"},
+                                        "highlightIndex": {"type": "integer", "description": "Flow step index to highlight, or -1 for no highlight."},
                                     },
                                 },
-                                "speaker_notes": {"type": "string"},
+                                "speaker_notes": {"type": "string", "description": "Brief presenter note. The current renderer keeps it as metadata/fallback text only."},
                                 "content": {
                                     "type": "object",
+                                    "description": "Layout-specific content. Include only fields consumed by the selected layout.",
                                     "additionalProperties": False,
-                                    "required": list(SLIDE_CONTENT_PROPERTIES.keys()),
                                     "properties": SLIDE_CONTENT_PROPERTIES,
                                 },
                             },
@@ -561,28 +579,147 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
         "$defs": {
             "card": {
                 "type": "object",
+                "description": "Short title/body pair for cards or flow steps.",
                 "additionalProperties": False,
                 "required": ["title", "body"],
-                "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+                "properties": {
+                    "title": {"type": "string", "description": "Short card or step title."},
+                    "body": {"type": "string", "description": "Short body text; use table layout when this needs to be long."},
+                },
             },
             "metric": {
                 "type": "object",
+                "description": "One metric card item.",
                 "additionalProperties": False,
                 "required": ["label", "value", "note"],
                 "properties": {
-                    "label": {"type": "string"},
-                    "value": {"type": "string"},
-                    "note": {"type": "string"},
+                    "label": {"type": "string", "description": "Metric label."},
+                    "value": {"type": "string", "description": "Metric value."},
+                    "note": {"type": "string", "description": "Short metric note or target."},
                 },
             },
             "event": {
                 "type": "object",
+                "description": "One timeline event.",
                 "additionalProperties": False,
                 "required": ["date", "title", "body"],
                 "properties": {
-                    "date": {"type": "string"},
-                    "title": {"type": "string"},
-                    "body": {"type": "string"},
+                    "date": {"type": "string", "description": "Date, phase, or time label."},
+                    "title": {"type": "string", "description": "Short event title."},
+                    "body": {"type": "string", "description": "Short event description."},
+                },
+            },
+        },
+    },
+}
+
+BOARD_SECTION_KINDS = {"overview", "flow", "cards", "metrics", "table", "timeline", "summary"}
+
+BOARD_IR_SECTION_PROPERTIES = {
+    "id": {"type": "string", "description": "Stable section id unique in this board."},
+    "kind": {
+        "type": "string",
+        "description": "Board section kind consumed by renderer.",
+        "enum": ["overview", "flow", "cards", "metrics", "table", "timeline", "summary"],
+    },
+    "title": {"type": "string", "description": "Short section title."},
+    "description": {"type": "string", "description": "One concise section explanation."},
+    "accent": {"type": "string", "description": "Optional section accent color in #RRGGBB format."},
+    "items": {"type": "array", "description": "Short lines for overview/cards/summary sections.", "items": {"type": "string", "description": "One concise line."}},
+    "nodes": {"type": "array", "description": "Flow nodes for flow sections.", "items": {"$ref": "#/$defs/board_node"}},
+    "edges": {"type": "array", "description": "Flow edges for flow sections.", "items": {"$ref": "#/$defs/board_edge"}},
+    "metrics": {"type": "array", "description": "Metric cards for metrics sections.", "items": {"$ref": "#/$defs/board_metric"}},
+    "columns": {"type": "array", "description": "Table headers for table sections.", "items": {"type": "string", "description": "Header label."}},
+    "rows": {"type": "array", "description": "Table rows for table sections.", "items": {"type": "array", "items": {"type": "string", "description": "Cell text."}}},
+    "events": {"type": "array", "description": "Timeline events for timeline sections.", "items": {"$ref": "#/$defs/board_event"}},
+}
+
+BOARD_IR_RESPONSE_SCHEMA = {
+    "name": "planb_board_ir_response",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["board_ir", "warnings"],
+        "properties": {
+            "warnings": {"type": "array", "items": {"type": "string"}},
+            "board_ir": {
+                "type": "object",
+                "description": "Renderer-ready board IR used to build whiteboard DSL.",
+                "additionalProperties": False,
+                "required": ["title", "file_name", "subtitle", "theme", "sections"],
+                "properties": {
+                    "title": {"type": "string", "description": "Board title shown in the top frame."},
+                    "file_name": {"type": "string", "description": "Output board file name without extension."},
+                    "subtitle": {"type": "string", "description": "Board subtitle context."},
+                    "theme": {
+                        "type": "object",
+                        "description": "Board palette tokens.",
+                        "additionalProperties": False,
+                        "required": ["accent", "accent2", "background", "surface", "text", "muted"],
+                        "properties": {
+                            "accent": {"type": "string", "description": "Primary accent color #RRGGBB."},
+                            "accent2": {"type": "string", "description": "Secondary accent color #RRGGBB."},
+                            "background": {"type": "string", "description": "Board background color #RRGGBB."},
+                            "surface": {"type": "string", "description": "Card/frame surface color #RRGGBB."},
+                            "text": {"type": "string", "description": "Primary text color #RRGGBB."},
+                            "muted": {"type": "string", "description": "Muted text color #RRGGBB."},
+                        },
+                    },
+                    "sections": {
+                        "type": "array",
+                        "description": "Ordered board sections consumed by the whiteboard renderer.",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["id", "kind", "title", "description", "accent", "items", "nodes", "edges", "metrics", "columns", "rows", "events"],
+                            "properties": BOARD_IR_SECTION_PROPERTIES,
+                        },
+                    },
+                },
+            },
+        },
+        "$defs": {
+            "board_node": {
+                "type": "object",
+                "description": "Flow node in a board flow section.",
+                "additionalProperties": False,
+                "required": ["id", "label"],
+                "properties": {
+                    "id": {"type": "string", "description": "Stable node id."},
+                    "label": {"type": "string", "description": "Node label text."},
+                },
+            },
+            "board_edge": {
+                "type": "object",
+                "description": "Directed edge between flow nodes.",
+                "additionalProperties": False,
+                "required": ["from", "to"],
+                "properties": {
+                    "from": {"type": "string", "description": "Source node id."},
+                    "to": {"type": "string", "description": "Target node id."},
+                },
+            },
+            "board_metric": {
+                "type": "object",
+                "description": "Metric item rendered as metric card.",
+                "additionalProperties": False,
+                "required": ["label", "value", "note"],
+                "properties": {
+                    "label": {"type": "string", "description": "Metric label."},
+                    "value": {"type": "string", "description": "Metric value."},
+                    "note": {"type": "string", "description": "Metric note."},
+                },
+            },
+            "board_event": {
+                "type": "object",
+                "description": "Timeline event rendered in timeline section.",
+                "additionalProperties": False,
+                "required": ["date", "title", "body"],
+                "properties": {
+                    "date": {"type": "string", "description": "Date or phase label."},
+                    "title": {"type": "string", "description": "Event title."},
+                    "body": {"type": "string", "description": "Event detail text."},
                 },
             },
         },
@@ -721,6 +858,44 @@ def generate_slide_draft_from_content_ir(content_ir: dict, options: dict | None 
         {
             "ok": True,
             "slide_draft": slide_draft,
+            "warnings": _dedupe(warnings),
+            "debug": llm_result.get("debug") or {},
+        },
+        started_at,
+    )
+
+
+def generate_board_ir_from_content_ir(content_ir: dict, options: dict | None = None) -> dict:
+    started_at = time.perf_counter()
+    payload = {"content_ir": content_ir if isinstance(content_ir, dict) else {}, "options": options or {}}
+    llm_result = _call_llm_json(
+        payload,
+        BOARD_IR_PROMPT,
+        BOARD_IR_RESPONSE_SCHEMA,
+        model_override=_ppt_model_from_options(options),
+        purpose="board_ir",
+    )
+    warnings = list(llm_result.get("warnings") or [])
+    if llm_result.get("ok") is not True:
+        return _finish("generate_board_ir", llm_result, started_at)
+
+    board_ir = _extract_named_object(llm_result.get("data") or {}, "board_ir")
+    board_ir = _ensure_board_ir_defaults(board_ir, payload["content_ir"])
+    board_ir = _normalize_board_ir(board_ir)
+    validation = _validate_board_ir(board_ir)
+    if validation:
+        return _finish(
+            "generate_board_ir",
+            _error("BOARD_IR_INVALID", "LLM returned invalid BoardIR.", validation, warnings),
+            started_at,
+            debug=llm_result.get("debug"),
+        )
+
+    return _finish(
+        "done",
+        {
+            "ok": True,
+            "board_ir": board_ir,
             "warnings": _dedupe(warnings),
             "debug": llm_result.get("debug") or {},
         },
@@ -1085,6 +1260,23 @@ def _linear_edges_for_nodes(nodes: Any) -> list[JsonDict]:
     return [{"from": ids[index], "to": ids[index + 1]} for index in range(len(ids) - 1)]
 
 
+def _edges_from_any(value: Any, nodes: list[JsonDict]) -> list[JsonDict]:
+    node_ids = {str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")}
+    output: list[JsonDict] = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, dict):
+            source = str(item.get("from") or "")
+            target = str(item.get("to") or "")
+        elif isinstance(item, list) and len(item) >= 2:
+            source = str(item[0] or "")
+            target = str(item[1] or "")
+        else:
+            continue
+        if source and target and source in node_ids and target in node_ids:
+            output.append({"from": source, "to": target})
+    return output or _linear_edges_for_nodes(nodes)
+
+
 def _summary_ir_from_request(request: JsonDict) -> JsonDict:
     task = _as_dict(request.get("task"))
     messages = [message for message in _as_list(request.get("messages")) if isinstance(message, dict)]
@@ -1192,6 +1384,7 @@ def _ensure_ir_defaults(ir: JsonDict, request: JsonDict) -> JsonDict:
     if not title:
         title = _infer_title_from_request(request)
     meta["title"] = title
+    meta.setdefault("file_name", _safe_output_name(title))
     meta.setdefault("subtitle", str(task.get("goal") or "").strip())
     meta.setdefault("owner", "Agent")
     meta.setdefault("date", date.today().isoformat())
@@ -1268,6 +1461,7 @@ def _ensure_content_ir_defaults(content_ir: JsonDict, request: JsonDict) -> Json
 def _ensure_slide_draft_defaults(slide_draft: JsonDict, content_ir: JsonDict) -> JsonDict:
     out = json.loads(json.dumps(slide_draft if isinstance(slide_draft, dict) else {}, ensure_ascii=False))
     out.setdefault("title", str(content_ir.get("title") or "Solution Plan"))
+    out.setdefault("file_name", _safe_output_name(str(out.get("title") or content_ir.get("title") or "presentation")))
     out.setdefault("subtitle", str(content_ir.get("subtitle") or ""))
     theme = out.setdefault("theme", {})
     if not isinstance(theme, dict):
@@ -1284,24 +1478,99 @@ def _ensure_slide_draft_defaults(slide_draft: JsonDict, content_ir: JsonDict) ->
             continue
         slide.setdefault("id", f"slide_{index + 1}")
         slide.setdefault("title", str(slide.get("id") or f"Slide {index + 1}"))
-        slide.setdefault("layout", "summary_next_steps")
+        slide.setdefault("layout", "summary")
         slide["layout"] = _canonical_slide_layout(str(slide.get("layout") or ""))
         slide.setdefault("asset_key", "")
         if not isinstance(slide.get("visual"), dict):
-            slide["visual"] = {"tone": "", "density": "", "imagePlacement": "", "highlightIndex": -1}
+            slide["visual"] = {"highlightIndex": -1}
         else:
             visual = slide["visual"]
-            visual.setdefault("tone", "")
-            visual.setdefault("density", "")
-            visual.setdefault("imagePlacement", "")
             visual.setdefault("highlightIndex", -1)
         if not isinstance(slide.get("content"), dict):
             slide["content"] = {}
         layout = str(slide.get("layout") or "")
         slide["content"] = _normalize_slide_content(layout, slide["content"])
-        if not _slide_content_has_renderable_items(layout, slide["content"]):
-            slide["content"] = _fallback_slide_content(layout, slide["content"], slide, content_ir)
         slide.setdefault("speaker_notes", "")
+    return out
+
+
+def _ensure_board_ir_defaults(board_ir: JsonDict, content_ir: JsonDict) -> JsonDict:
+    out = json.loads(json.dumps(board_ir if isinstance(board_ir, dict) else {}, ensure_ascii=False))
+    title = str(out.get("title") or content_ir.get("title") or "Solution Board")
+    out.setdefault("title", title)
+    out.setdefault("file_name", _safe_output_name(title))
+    out.setdefault("subtitle", str(content_ir.get("subtitle") or ""))
+    theme = out.get("theme")
+    if not isinstance(theme, dict):
+        theme = {}
+        out["theme"] = theme
+    theme.setdefault("accent", "#2F6BFF")
+    theme.setdefault("accent2", "#7C3AED")
+    theme.setdefault("background", "#F8FAFC")
+    theme.setdefault("surface", "#FFFFFF")
+    theme.setdefault("text", "#0F172A")
+    theme.setdefault("muted", "#64748B")
+    sections = out.get("sections")
+    if not isinstance(sections, list):
+        sections = []
+        out["sections"] = sections
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            continue
+        section.setdefault("id", f"section_{index + 1}")
+        section.setdefault("kind", "overview")
+        section.setdefault("title", str(section.get("id") or f"Section {index + 1}"))
+        section.setdefault("description", "")
+        section.setdefault("accent", "")
+        for key in ("items", "nodes", "edges", "metrics", "columns", "rows", "events"):
+            if not isinstance(section.get(key), list):
+                section[key] = []
+    return out
+
+
+def _normalize_board_ir(board_ir: JsonDict) -> JsonDict:
+    out = json.loads(json.dumps(board_ir if isinstance(board_ir, dict) else {}, ensure_ascii=False))
+    sections = out.get("sections")
+    if not isinstance(sections, list):
+        out["sections"] = []
+        return out
+    normalized_sections: list[JsonDict] = []
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            continue
+        kind = str(section.get("kind") or "").strip()
+        if kind not in BOARD_SECTION_KINDS:
+            kind = "overview"
+        clean: JsonDict = {
+            "id": str(section.get("id") or f"section_{index + 1}"),
+            "kind": kind,
+            "title": str(section.get("title") or f"Section {index + 1}"),
+            "description": str(section.get("description") or ""),
+            "accent": str(section.get("accent") or ""),
+            "items": [],
+            "nodes": [],
+            "edges": [],
+            "metrics": [],
+            "columns": [],
+            "rows": [],
+            "events": [],
+        }
+        if kind in {"overview", "cards", "summary"}:
+            clean["items"] = _string_list_from_any(section.get("items"))
+        elif kind == "flow":
+            clean["nodes"] = _flow_nodes_from_any(section.get("nodes") or section.get("items"))
+            clean["edges"] = _linear_edges_for_nodes(clean["nodes"])
+            if isinstance(section.get("edges"), list) and section.get("edges"):
+                clean["edges"] = _edges_from_any(section.get("edges"), clean["nodes"])
+        elif kind == "metrics":
+            clean["metrics"] = _metric_list_from_any(section.get("metrics") or section.get("items"))
+        elif kind == "table":
+            clean["columns"] = _string_list_from_any(section.get("columns"))
+            clean["rows"] = _normalize_table_rows(section.get("rows"), len(clean["columns"]))
+        elif kind == "timeline":
+            clean["events"] = _event_list_from_any(section.get("events") or section.get("items"))
+        normalized_sections.append(clean)
+    out["sections"] = normalized_sections
     return out
 
 
@@ -1422,8 +1691,19 @@ def _validate_slide_draft(slide_draft: JsonDict) -> list[str]:
     errors: list[str] = []
     if not isinstance(slide_draft, dict):
         return ["SlideDraft must be an object."]
+    allowed_deck_keys = {"title", "file_name", "subtitle", "theme", "assets", "slides"}
+    for key in slide_draft:
+        if key not in allowed_deck_keys:
+            errors.append(f"slide_draft.{key} is not supported.")
     if not str(slide_draft.get("title") or "").strip():
         errors.append("slide_draft.title is required.")
+    theme = slide_draft.get("theme")
+    if not isinstance(theme, dict):
+        errors.append("slide_draft.theme must be an object.")
+    else:
+        for key in theme:
+            if key not in THEME_COLOR_FIELDS and key != "name":
+                errors.append(f"slide_draft.theme.{key} is not supported.")
     slides = slide_draft.get("slides")
     if not isinstance(slides, list) or not slides:
         errors.append("slide_draft.slides must be a non-empty array.")
@@ -1433,51 +1713,168 @@ def _validate_slide_draft(slide_draft: JsonDict) -> list[str]:
         if not isinstance(slide, dict):
             errors.append(f"slides[{index}] must be an object.")
             continue
-        layout = _canonical_slide_layout(str(slide.get("layout") or ""))
+        allowed_slide_keys = {"id", "title", "layout", "content", "asset_key", "visual", "speaker_notes"}
+        for key in slide:
+            if key not in allowed_slide_keys:
+                errors.append(f"slides[{index}].{key} is not supported.")
+        layout = str(slide.get("layout") or "").strip()
         layouts.append(layout)
         for key in ("id", "title", "layout"):
             if not str(slide.get(key) or "").strip():
                 errors.append(f"slides[{index}].{key} is required.")
         if layout not in SLIDE_LAYOUTS:
             errors.append(f"Unsupported slide layout: {layout}.")
+        visual = slide.get("visual")
+        if visual is not None:
+            if not isinstance(visual, dict):
+                errors.append(f"slides[{index}].visual must be an object.")
+            else:
+                for key in visual:
+                    if key != "highlightIndex":
+                        errors.append(f"slides[{index}].visual.{key} is not supported.")
+                if "highlightIndex" in visual and not isinstance(visual.get("highlightIndex"), int):
+                    errors.append(f"slides[{index}].visual.highlightIndex must be an integer.")
         content = slide.get("content")
         if not isinstance(content, dict) or not content:
             errors.append(f"slides[{index}].content must be a non-empty object.")
-        elif not _slide_content_has_renderable_items(layout, content):
-            errors.append(f"slides[{index}].content does not match layout schema for {layout}.")
+        else:
+            _validate_slide_content(index, layout, content, errors)
     for index in range(2, len(layouts)):
         if layouts[index] == layouts[index - 1] == layouts[index - 2]:
             errors.append(f"slides[{index - 2}:{index + 1}] reuse layout {layouts[index]} 3 times.")
     return errors
 
 
+def validate_slide_draft(slide_draft: JsonDict) -> list[str]:
+    return _validate_slide_draft(slide_draft)
+
+
+def _validate_board_ir(board_ir: JsonDict) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(board_ir, dict):
+        return ["BoardIR must be an object."]
+    for key in ("title", "file_name", "subtitle"):
+        if not str(board_ir.get(key) or "").strip():
+            errors.append(f"board_ir.{key} is required.")
+    theme = board_ir.get("theme")
+    if not isinstance(theme, dict):
+        errors.append("board_ir.theme must be an object.")
+    else:
+        for key in ("accent", "accent2", "background", "surface", "text", "muted"):
+            if not str(theme.get(key) or "").strip():
+                errors.append(f"board_ir.theme.{key} is required.")
+    sections = board_ir.get("sections")
+    if not isinstance(sections, list) or not sections:
+        errors.append("board_ir.sections must be a non-empty array.")
+        return errors
+    for index, section in enumerate(sections):
+        if not isinstance(section, dict):
+            errors.append(f"sections[{index}] must be an object.")
+            continue
+        kind = str(section.get("kind") or "")
+        if kind not in BOARD_SECTION_KINDS:
+            errors.append(f"sections[{index}].kind is not supported: {kind}.")
+            continue
+        if not str(section.get("id") or "").strip():
+            errors.append(f"sections[{index}].id is required.")
+        if not str(section.get("title") or "").strip():
+            errors.append(f"sections[{index}].title is required.")
+        if kind in {"overview", "cards", "summary"} and not section.get("items"):
+            errors.append(f"sections[{index}].items must be non-empty for {kind}.")
+        if kind == "flow":
+            nodes = section.get("nodes")
+            edges = section.get("edges")
+            if not isinstance(nodes, list) or not nodes:
+                errors.append(f"sections[{index}].nodes must be non-empty for flow.")
+            if not isinstance(edges, list) or not edges:
+                errors.append(f"sections[{index}].edges must be non-empty for flow.")
+        if kind == "metrics" and not section.get("metrics"):
+            errors.append(f"sections[{index}].metrics must be non-empty for metrics.")
+        if kind == "table":
+            columns = section.get("columns")
+            rows = section.get("rows")
+            if not isinstance(columns, list) or not columns:
+                errors.append(f"sections[{index}].columns must be non-empty for table.")
+            if not isinstance(rows, list) or not rows:
+                errors.append(f"sections[{index}].rows must be non-empty for table.")
+        if kind == "timeline" and not section.get("events"):
+            errors.append(f"sections[{index}].events must be non-empty for timeline.")
+    return errors
+
+
+def validate_board_ir(board_ir: JsonDict) -> list[str]:
+    return _validate_board_ir(board_ir)
+
+
+def _validate_slide_content(index: int, layout: str, content: JsonDict, errors: list[str]) -> None:
+    allowed_by_layout = {
+        "cover": {"subtitle", "kicker", "owner", "audience"},
+        "split": {"points"},
+        "cards": {"cards"},
+        "metrics": {"metrics"},
+        "flow": {"steps"},
+        "table": {"columns", "rows"},
+        "timeline": {"events"},
+        "summary": {"next_steps", "outcomes"},
+    }
+    allowed = allowed_by_layout.get(layout, set())
+    for key in content:
+        if key not in allowed:
+            errors.append(f"slides[{index}].content.{key} is not supported for layout {layout}.")
+    if not _slide_content_has_renderable_items(layout, content):
+        errors.append(f"slides[{index}].content does not match layout schema for {layout}.")
+    if layout in {"cards", "flow"}:
+        key = "cards" if layout == "cards" else "steps"
+        for item_index, item in enumerate(content.get(key) or []):
+            if not isinstance(item, dict):
+                errors.append(f"slides[{index}].content.{key}[{item_index}] must be an object.")
+                continue
+            for field in item:
+                if field not in {"title", "body"}:
+                    errors.append(f"slides[{index}].content.{key}[{item_index}].{field} is not supported.")
+    if layout == "table":
+        columns = content.get("columns")
+        rows = content.get("rows")
+        if isinstance(columns, list) and isinstance(rows, list):
+            width = len(columns)
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, list):
+                    errors.append(f"slides[{index}].content.rows[{row_index}] must be an array.")
+                elif len(row) != width:
+                    errors.append(f"slides[{index}].content.rows[{row_index}] must match columns length.")
+    if layout == "timeline":
+        for event_index, event in enumerate(content.get("events") or []):
+            if not isinstance(event, dict):
+                errors.append(f"slides[{index}].content.events[{event_index}] must be an object.")
+                continue
+            for field in event:
+                if field not in {"date", "title", "body"}:
+                    errors.append(f"slides[{index}].content.events[{event_index}].{field} is not supported.")
+
+
 def _normalize_slide_content(layout: str, content: JsonDict) -> JsonDict:
     out = dict(content)
     layout = _canonical_slide_layout(layout)
-    if layout == "section_divider":
-        out["points"] = _string_list_from_any(
-            out.get("points")
-            or out.get("bullets")
-            or out.get("items")
-            or [out.get("left"), out.get("right"), out.get("body"), out.get("description")]
-        )
-    elif layout == "problem_cards":
-        out["problems"] = _card_list_from_any(out.get("problems") or out.get("cards") or out.get("items"))
-    elif layout == "metric_cards":
-        out["metrics"] = _metric_list_from_any(out.get("metrics") or out.get("items") or out.get("cards"))
-    elif layout == "three_stage_flow":
-        out["steps"] = _card_list_from_any(
-            out.get("steps") or out.get("nodes") or out.get("phases") or out.get("items") or out.get("roadmap")
-        )
+    if layout == "split" and "points" in out:
+        out["points"] = _string_list_from_any(out.get("points"))
+    elif layout == "cards" and "cards" in out:
+        out["cards"] = _slide_card_list_from_any(out.get("cards"))
+    elif layout == "metrics" and "metrics" in out:
+        out["metrics"] = _metric_list_from_any(out.get("metrics"))
+    elif layout == "flow" and "steps" in out:
+        out["steps"] = _slide_card_list_from_any(out.get("steps"))
     elif layout == "timeline":
-        out["events"] = _event_list_from_any(out.get("events") or out.get("items") or out.get("milestones") or out.get("roadmap"))
-    elif layout in {"risk_table", "comparison_table"}:
-        out["columns"] = _string_list_from_any(out.get("columns") or out.get("headers"))
-        rows = out.get("rows") or out.get("risks") or out.get("comparisons") or out.get("items")
-        out["rows"] = _rows_from_any(rows)
-    elif layout == "summary_next_steps":
-        out["outcomes"] = _string_list_from_any(out.get("outcomes") or out.get("expected_outcomes") or out.get("benefits"))
-        out["next_steps"] = _string_list_from_any(out.get("next_steps") or out.get("points") or out.get("bullets") or out.get("items"))
+        out["events"] = _event_list_from_any(out.get("events"))
+    elif layout == "table":
+        if "columns" in out:
+            out["columns"] = _string_list_from_any(out.get("columns"))
+        if "rows" in out:
+            out["rows"] = _rows_from_any(out.get("rows"))
+    elif layout == "summary":
+        if "outcomes" in out:
+            out["outcomes"] = _string_list_from_any(out.get("outcomes"))
+        if "next_steps" in out:
+            out["next_steps"] = _string_list_from_any(out.get("next_steps"))
     return out
 
 
@@ -1496,20 +1893,20 @@ def _fallback_slide_content(
             "subtitle": str(content_ir.get("subtitle") or background or title),
             "kicker": str(content_ir.get("audience") or "Generated presentation"),
         }
-    if layout == "problem_cards":
+    if layout == "cards":
         cards = _card_list_from_any(
             content_ir.get("problems")
             or content_ir.get("solution_modules")
             or content_ir.get("risks")
             or [{"title": title, "description": background}]
         )
-        return {**out, "problems": cards or [{"title": title, "body": background}]}
-    if layout == "metric_cards":
+        return {**out, "cards": cards or [{"title": title, "body": background}]}
+    if layout == "metrics":
         metrics = _metric_list_from_any(content_ir.get("metrics") or [])
         if not metrics:
             metrics = [{"label": "核心目标", "value": title[:24], "note": background[:80]}]
         return {**out, "metrics": metrics}
-    if layout == "three_stage_flow":
+    if layout == "flow":
         steps = _card_list_from_any(
             content_ir.get("process")
             or content_ir.get("solution_modules")
@@ -1522,13 +1919,13 @@ def _fallback_slide_content(
         if not events:
             events = [{"date": "近期", "title": title, "body": background}]
         return {**out, "events": events}
-    if layout in {"risk_table", "comparison_table"}:
+    if layout == "table":
         rows = _rows_from_any(content_ir.get("risks") or [])
         if not rows:
             rows = [[title, background]]
         columns = out.get("columns") or ["事项", "说明"]
         return {**out, "columns": columns, "rows": rows}
-    if layout == "summary_next_steps":
+    if layout == "summary":
         outcomes = _string_list_from_any(content_ir.get("expected_outcomes") or [])
         next_steps = _string_list_from_any(content_ir.get("decision_points") or content_ir.get("process") or [])
         return {
@@ -1542,19 +1939,19 @@ def _fallback_slide_content(
 def _slide_content_has_renderable_items(layout: str, content: JsonDict) -> bool:
     if layout == "cover":
         return bool(str(content.get("subtitle") or content.get("kicker") or "").strip())
-    if layout == "section_divider":
+    if layout == "split":
         return True
-    if layout == "problem_cards":
-        return bool(content.get("problems"))
-    if layout == "metric_cards":
+    if layout == "cards":
+        return bool(content.get("cards"))
+    if layout == "metrics":
         return bool(content.get("metrics"))
-    if layout == "three_stage_flow":
+    if layout == "flow":
         return bool(content.get("steps"))
     if layout == "timeline":
         return bool(content.get("events"))
-    if layout in {"risk_table", "comparison_table"}:
+    if layout == "table":
         return bool(content.get("columns")) and bool(content.get("rows"))
-    if layout == "summary_next_steps":
+    if layout == "summary":
         return bool(content.get("outcomes") or content.get("next_steps"))
     return True
 
@@ -1604,7 +2001,7 @@ def _default_theme() -> dict[str, str]:
         "body_title": "#0F172A",
         "body_text": "#0F172A",
         "body_muted": "#64748B",
-        "fontFace": "Aptos",
+        "fontFace": "Microsoft YaHei",
     }
 
 
@@ -1683,6 +2080,13 @@ def _card_list_from_any(value: Any) -> list[JsonDict]:
     return [item for item in output if item["title"] or item["body"]]
 
 
+def _slide_card_list_from_any(value: Any) -> list[JsonDict]:
+    return [
+        {"title": item["title"], "body": item["body"]}
+        for item in _card_list_from_any(value)
+    ]
+
+
 def _metric_list_from_any(value: Any) -> list[JsonDict]:
     output = []
     for item in value if isinstance(value, list) else []:
@@ -1701,13 +2105,21 @@ def _event_list_from_any(value: Any) -> list[JsonDict]:
     output = []
     for item in value if isinstance(value, list) else []:
         if isinstance(item, dict):
+            owner = str(item.get("owner") or item.get("assignee") or "").strip()
+            status = str(item.get("status") or item.get("state") or "").strip()
+            body = str(item.get("body") or item.get("description") or item.get("text") or item.get("note") or "").strip()
+            suffix_parts = []
+            if owner:
+                suffix_parts.append(f"owner: {owner}")
+            if status:
+                suffix_parts.append(f"status: {status}")
+            if suffix_parts:
+                body = " | ".join(part for part in [body, ", ".join(suffix_parts)] if part)
             output.append(
                 {
                     "date": str(item.get("date") or item.get("time") or item.get("phase") or ""),
                     "title": str(item.get("title") or item.get("label") or item.get("name") or ""),
-                    "body": str(item.get("body") or item.get("description") or item.get("text") or item.get("note") or ""),
-                    "owner": str(item.get("owner") or item.get("assignee") or ""),
-                    "status": str(item.get("status") or item.get("state") or ""),
+                    "body": body,
                 }
             )
     return [item for item in output if item["date"] or item["title"] or item["body"]]
@@ -1765,6 +2177,12 @@ def _safe_id(value: str) -> str:
     return safe.strip("_") or "task"
 
 
+def _safe_output_name(value: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1F]+', "_", str(value or "").strip())
+    safe = re.sub(r"\s+", " ", safe).strip(" ._")
+    return safe[:60] or "Generated Presentation"
+
+
 def _elapsed_ms(started_at: float) -> float:
     return round((time.perf_counter() - started_at) * 1000, 3)
 
@@ -1781,7 +2199,10 @@ def _dedupe(items: list[Any]) -> list[Any]:
 
 
 __all__ = [
+    "generate_board_ir_from_content_ir",
     "generate_content_ir_from_messages",
     "generate_ir_from_messages",
     "generate_slide_draft_from_content_ir",
+    "validate_board_ir",
+    "validate_slide_draft",
 ]
