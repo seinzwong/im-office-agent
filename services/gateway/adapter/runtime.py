@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,18 @@ def env_value(name: str, default: str = "") -> str:
 
 
 def lark_cli_path() -> str:
-    raw = env_value("LARK_CLI_PATH", "lark-cli.cmd")
+    raw = env_value("LARK_CLI_PATH")
+    if not raw:
+        try:
+            from services.gateway.app.config import get_settings
+
+            raw = get_settings().lark_cli_path
+        except Exception:
+            raw = ""
+    raw = raw or "lark-cli.cmd"
+    resolved = shutil.which(raw)
+    if resolved:
+        return resolved
     path = Path(raw)
     if path.name.lower() == "lark-cli.cmd":
         exe = path.parent / "node_modules" / "@larksuite" / "cli" / "bin" / "lark-cli.exe"

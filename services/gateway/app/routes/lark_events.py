@@ -7,10 +7,111 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
-from ..pipelines.summary_from_event import run_summary_for_chat
+from ..config import get_settings
+from ..feishu_openapi import reply_text_to_message
+from ..pipelines.summary_from_event import run_summary_command
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/lark", tags=["lark"])
+
+DEFAULT_SUMMARY_MINUTES = 60
+DEFAULT_SUMMARY_LIMIT = 200
+MAX_SUMMARY_LIMIT = 200
+
+
+def _parse_content(content: Any) -> dict[str, Any]:
+    if isinstance(content, str) and content.strip().startswith("{"):
+        try:
+            value = json.loads(content)
+            return value if isinstance(value, dict) else {"text": str(value)}
+        except Exception:  # noqa: BLE001
+            return {"text": content}
+    if isinstance(content, str):
+        return {"text": content}
+    return content if isinstance(content, dict) else {"text": str(content)}
+
+
+def _message_text(msg: dict[str, Any]) -> str:
+    content = _parse_content(msg.get("content", ""))
+    return str(content.get("text", content) or "")
+
+
+def _is_bot_mentioned(msg: dict[str, Any], text: str) -> bool:
+    mentions = msg.get("mentions")
+    if isinstance(mentions, list) and mentions:
+        return True
+    return text.strip().startswith("@")
+
+
+def _strip_leading_mention(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("@"):
+        return stripped
+    parts = stripped.split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def parse_summary_command(text: str) -> tuple[int, int]:
+    parts = text.strip().split()
+    minutes = DEFAULT_SUMMARY_MINUTES
+    limit = DEFAULT_SUMMARY_LIMIT
+    if len(parts) >= 2:
+        minutes = _positive_int(parts[1], DEFAULT_SUMMARY_MINUTES)
+    if len(parts) >= 3:
+        limit = _positive_int(parts[2], DEFAULT_SUMMARY_LIMIT)
+    return minutes, min(limit, MAX_SUMMARY_LIMIT)
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _sender_mention_id(ev: dict[str, Any]) -> str:
+    sender = ev.get("sender") if isinstance(ev.get("sender"), dict) else {}
+    sender_id = sender.get("sender_id") if isinstance(sender.get("sender_id"), dict) else {}
+    for key in ("open_id", "user_id", "union_id"):
+        value = str(sender_id.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _opening_text(user_id: str) -> str:
+    prefix = f'<at user_id="{user_id}"></at>\n' if user_id else ""
+    return (
+        f"{prefix}"
+        "你好，我是本群的办公协作机器人。\n"
+        "• 需要整理群聊要点时，请 @我 并在同一条消息里发送 /summary\n"
+        "• 发送 /help 查看可用指令"
+    )
+
+
+def _help_text(user_id: str) -> str:
+    prefix = f'<at user_id="{user_id}"></at>\n' if user_id else ""
+    return (
+        f"{prefix}"
+        "可用指令：\n"
+        "• /summary：整理最近 60 分钟群聊，最多 200 条消息\n"
+        "• /summary 30：整理最近 30 分钟群聊\n"
+        "• /summary 30 100：整理最近 30 分钟、最多 100 条消息\n"
+        "• /help：查看可用指令"
+    )
+
+
+def _unknown_command_text(user_id: str) -> str:
+    prefix = f'<at user_id="{user_id}"></at>\n' if user_id else ""
+    return f"{prefix}该功能还没开发好，请检查已有指令"
+
+
+def _reply_later(message_id: str, text: str) -> None:
+    try:
+        reply_text_to_message(get_settings(), message_id, text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lark reply failed: %s", exc)
 
 
 @router.post("/events")
@@ -36,27 +137,40 @@ async def lark_events(
 
     chat_id = (msg.get("chat_id") or (ev.get("chat_id") or "unknown"))[:64]
     mid = (msg.get("message_id") or "unknown")[:100]
-    content = msg.get("content", "")
-    cj: dict[str, Any]
-    if isinstance(content, str) and content.strip().startswith("{"):
-        try:
-            cj = json.loads(content)
-        except Exception:  # noqa: BLE001
-            cj = {"text": content}
-    elif isinstance(content, str):
-        cj = {"text": content}
-    else:
-        cj = content if isinstance(content, dict) else {"text": str(content)}
-    text = str(cj.get("text", cj) or "")
-    hint = text[:200] if not text.strip().startswith("@") else " ".join(text.split()[1:200])[:200]
+    text = _message_text(msg)
+    if not _is_bot_mentioned(msg, text):
+        return {"ok": "true"}
+
+    command_text = _strip_leading_mention(text)
+    user_id = _sender_mention_id(ev)
     t0 = int(time.time())
-    if chat_id and chat_id != "unknown":
-        background_tasks.add_task(
-            run_summary_for_chat,
-            chat_id,
-            hint,
-            t0,
-            text or "（无文本）",
-            mid,
-        )
+
+    if not command_text:
+        background_tasks.add_task(_reply_later, mid, _opening_text(user_id))
+    elif command_text == "/help":
+        background_tasks.add_task(_reply_later, mid, _help_text(user_id))
+    elif _is_summary_command(command_text):
+        minutes, limit = parse_summary_command(command_text)
+        if chat_id and chat_id != "unknown":
+            background_tasks.add_task(
+                run_summary_command,
+                chat_id,
+                mid,
+                user_id,
+                t0,
+                minutes,
+                limit,
+            )
+    elif command_text.startswith("/"):
+        background_tasks.add_task(_reply_later, mid, _unknown_command_text(user_id))
+
     return {"ok": "true"}
+
+
+__all__ = [
+    "parse_summary_command",
+]
+
+
+def _is_summary_command(text: str) -> bool:
+    return text == "/summary" or text.startswith("/summary ")

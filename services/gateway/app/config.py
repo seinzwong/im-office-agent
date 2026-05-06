@@ -28,6 +28,9 @@ _ENV_TO_FIELD: tuple[tuple[str, str], ...] = (
     ("LARK_EVENT_ENCRYPT_KEY", "lark_event_encrypt_key"),
     ("LARK_VERIFICATION_TOKEN", "lark_verification_token"),
     ("LARK_BASE_URL", "lark_base_url"),
+    ("FEISHU_USER_ACCESS_TOKEN", "feishu_user_access_token"),
+    ("OAUTH_USER_SCOPES", "oauth_user_scopes"),
+    ("OAUTH_TOKEN_STORE_PATH", "oauth_token_store_path"),
     ("LARK_CLI_PATH", "lark_cli_path"),
     ("CORS_ORIGINS", "cors_origins"),
 )
@@ -157,6 +160,9 @@ class Settings(BaseModel):
     lark_event_encrypt_key: str = ""
     lark_verification_token: str = ""
     lark_base_url: str = "https://open.feishu.cn"
+    feishu_user_access_token: str = ""
+    oauth_user_scopes: str = ""
+    oauth_token_store_path: str = ".artifacts/auth/user_tokens.json"
 
     artifacts_drive_folder_token: str = ""
     dev_skip_lark: bool = False

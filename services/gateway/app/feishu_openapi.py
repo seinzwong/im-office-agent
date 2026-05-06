@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -25,6 +27,13 @@ def _docx_view_base(s: Settings) -> str:
     if "larksuite" in (s.lark_base_url or "").lower():
         return "https://www.larksuite.com/docx/"
     return "https://www.feishu.cn/docx/"
+
+
+def docx_open_url(s: Settings, document_id: str) -> str:
+    doc_id = (document_id or "").strip()
+    if not doc_id:
+        return ""
+    return f"{_docx_view_base(s).rstrip('/')}/{doc_id}"
 
 
 def get_tenant_access_token(s: Settings) -> str:
@@ -85,6 +94,171 @@ def drive_list_folder_files(s: Settings, folder_token: str) -> list[dict[str, An
         if not page_token:
             break
     return out
+
+
+def reply_text_to_message(s: Settings, message_id: str, text: str) -> dict[str, Any]:
+    """Reply to a Feishu/Lark message with a text message."""
+    mid = (message_id or "").strip()
+    if not mid:
+        return {"ok": False, "error": "message_id is required"}
+    base = _api_base(s)
+    token = get_tenant_access_token(s)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    r = httpx.post(
+        f"{base}/open-apis/im/v1/messages/{mid}/reply",
+        headers=headers,
+        json={
+            "msg_type": "text",
+            "content": json.dumps({"text": text or ""}, ensure_ascii=False),
+        },
+        timeout=30.0,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if data.get("code", 0) != 0:
+        raise RuntimeError(f"message reply: code={data.get('code')} msg={data.get('msg')}")
+    return data.get("data") or {}
+
+
+def list_chat_messages(
+    s: Settings,
+    chat_id: str,
+    start_unix: int,
+    end_unix: int,
+    limit: int = 200,
+) -> list[dict[str, str]]:
+    """Fetch readable text messages from a chat in chronological order."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return []
+    remaining = max(1, min(int(limit or 200), 200))
+    base = _api_base(s)
+    token = get_tenant_access_token(s)
+    headers = {"Authorization": f"Bearer {token}"}
+    out: list[dict[str, str]] = []
+    page_token: str | None = None
+    while remaining > 0:
+        params: dict[str, Any] = {
+            "container_id_type": "chat",
+            "container_id": cid,
+            "start_time": str(int(start_unix)),
+            "end_time": str(int(end_unix)),
+            "page_size": min(50, remaining),
+        }
+        if page_token:
+            params["page_token"] = page_token
+        r = httpx.get(
+            f"{base}/open-apis/im/v1/messages",
+            params=params,
+            headers=headers,
+            timeout=60.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data.get("code", 0) != 0:
+            raise RuntimeError(f"message list: code={data.get('code')} msg={data.get('msg')}")
+        body = data.get("data") or {}
+        items = body.get("items") or []
+        if not isinstance(items, list):
+            break
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = _message_plain_text(item)
+            if not text:
+                continue
+            out.append(
+                {
+                    "message_id": str(item.get("message_id") or item.get("id") or f"msg_{len(out) + 1}"),
+                    "sender": _message_sender(item),
+                    "timestamp": _message_timestamp(item),
+                    "text": text,
+                }
+            )
+            remaining -= 1
+            if remaining <= 0:
+                break
+        if remaining <= 0 or not body.get("has_more"):
+            break
+        page_token = str(body.get("page_token") or "")
+        if not page_token:
+            break
+    return sorted(out, key=lambda item: item.get("timestamp") or "")
+
+
+def _message_plain_text(item: dict[str, Any]) -> str:
+    content = item.get("body", {}).get("content") if isinstance(item.get("body"), dict) else item.get("content")
+    parsed = _parse_message_content(content)
+    text = str(parsed.get("text") or "").strip()
+    if text:
+        return text
+    post = parsed.get("post")
+    if isinstance(post, dict):
+        return _post_plain_text(post)
+    return ""
+
+
+def _parse_message_content(content: Any) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str) and content.strip().startswith("{"):
+        try:
+            value = json.loads(content)
+            return value if isinstance(value, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {"text": content}
+    if isinstance(content, str):
+        return {"text": content}
+    return {}
+
+
+def _post_plain_text(post: dict[str, Any]) -> str:
+    zh_cn = post.get("zh_cn") if isinstance(post.get("zh_cn"), dict) else {}
+    content = zh_cn.get("content")
+    lines: list[str] = []
+    for line in content if isinstance(content, list) else []:
+        pieces: list[str] = []
+        for node in line if isinstance(line, list) else []:
+            if not isinstance(node, dict):
+                continue
+            tag = node.get("tag")
+            if tag == "text":
+                pieces.append(str(node.get("text") or ""))
+            elif tag == "at":
+                pieces.append(str(node.get("user_name") or node.get("user_id") or ""))
+        joined = "".join(pieces).strip()
+        if joined:
+            lines.append(joined)
+    return "\n".join(lines).strip()
+
+
+def _message_sender(item: dict[str, Any]) -> str:
+    sender = item.get("sender") if isinstance(item.get("sender"), dict) else {}
+    sender_id = sender.get("id") if isinstance(sender.get("id"), dict) else sender.get("sender_id")
+    if isinstance(sender_id, dict):
+        for key in ("open_id", "user_id", "union_id"):
+            value = str(sender_id.get(key) or "").strip()
+            if value:
+                return value
+    for key in ("sender_type", "id"):
+        value = str(sender.get(key) or "").strip()
+        if value:
+            return value
+    return "unknown"
+
+
+def _message_timestamp(item: dict[str, Any]) -> str:
+    raw = str(item.get("create_time") or item.get("update_time") or "").strip()
+    try:
+        value = int(raw)
+        if value > 10_000_000_000:
+            value = value // 1000
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    except Exception:
+        return raw
 
 
 def _xmlish_to_plain(xml: str, max_len: int = 120_000) -> str:

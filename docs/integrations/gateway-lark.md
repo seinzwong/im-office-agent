@@ -11,7 +11,9 @@
 - **事件订阅**：
   - `im.message.receive_v1`（以控制台为准）
   - 请求地址：`{GATEWAY_PUBLIC_BASE_URL}/lark/events`
-- **权限 scope**：`im:chat:readonly`、`im:message:readonly` 或发消息/读会话所需 scope；**云盘列目录**（`drive:drive:readonly` 等）、**创建云文档**（`docx:document` / `docx:document:create` 等）按 Gateway 当前 OpenAPI 调用申请。
+- **权限 scope**：`im:chat:readonly`、`im:message:readonly` 或读群消息历史所需 scope；回复消息所需 IM 发消息 scope；**云盘列目录**（`drive:drive:readonly` 等）、**创建云文档**（`docx:document` / `docx:document:create` 等）按 Gateway 当前 OpenAPI 调用申请。
+- **文档创建身份**：如果目标文件夹属于用户个人云盘且未授权给应用，请配置 `FEISHU_USER_ACCESS_TOKEN` / `feishu_user_access_token`；留空时 Gateway 使用应用 `tenant_access_token` 创建文档。
+- **用户授权**：`/summary` 会优先使用触发用户的 OAuth `user_access_token` 创建文档。用户未授权时，机器人会回复 `/api/v1/auth/login?state=...` 授权链接；授权完成后用户重新发送 `/summary`。
 
 ## 加解密
 
@@ -32,7 +34,13 @@
 
 ## 机器人可见回复
 
-- 在收到 `@` 或关键词后，飞书将消息事件 POST 到 Gateway。  
-- Gateway 完成流程后，通过**开放平台开放接口**以应用身份**回复消息/卡片**（本仓库在 Gateway 内留接口封装位；具体 `tenant_access_token` 获取按官方要求）。
+- 在收到 `@` 后，飞书将消息事件 POST 到 Gateway。
+- 当前支持命令：
+  - 只 `@` 机器人且无正文：回复开场白并 @ 触发用户。
+  - `/help`：展示可用命令。
+  - `/summary [minutes] [limit]`：拉取最近一段群聊并生成飞书文档；默认 `60` 分钟、最多 `200` 条，`limit` 上限为 `200`。
+  - 其他 `/` 指令：回复“该功能还没开发好，请检查已有指令”。
+- `/summary` 流程：拉取群消息历史 -> 调用 Agent 生成 IR -> 用 IR 渲染并创建 docx -> 回复原消息，回复中包含统计时间窗、消息条数和文档链接。
+- OAuth token 默认保存在 `.artifacts/auth/user_tokens.json`；可通过 `oauth_token_store_path` 覆盖。默认用户 scope 包含 `offline_access`、`docx:document:create`、`docx:document:write_only`、`drive:file:upload`、`space:document:retrieve` 和 `contact:user.base:readonly`。
 
 > **注意**：Gateway 使用环境变量中的 **`LARK_APP_ID` / `LARK_APP_SECRET`** 换取 `tenant_access_token`；与飞书网页 OAuth 使用同一应用时，控制台 **scope 并集** 需覆盖上述能力。

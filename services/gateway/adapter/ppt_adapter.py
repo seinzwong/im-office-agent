@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -23,6 +25,8 @@ def slide_draft_to_ppt_draft(slide_draft: dict) -> dict:
                 "layout": str(slide.get("layout") or "summary_next_steps"),
                 "title": str(slide.get("title") or ""),
                 "content": content,
+                "visual": slide.get("visual") if isinstance(slide.get("visual"), dict) else {},
+                "asset_key": str(slide.get("asset_key") or slide.get("assetKey") or slide.get("image") or ""),
                 "speaker_notes": str(slide.get("speaker_notes") or ""),
             }
         )
@@ -30,6 +34,7 @@ def slide_draft_to_ppt_draft(slide_draft: dict) -> dict:
         "title": str(draft.get("title") or "Generated Presentation"),
         "subtitle": str(draft.get("subtitle") or ""),
         "theme": draft.get("theme") if isinstance(draft.get("theme"), dict) else {},
+        "assets": draft.get("assets") if isinstance(draft.get("assets"), dict) else {},
         "slides": slides,
     }
 
@@ -58,6 +63,13 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
     mode = str(options.get("mode") or "create")
     if mode not in {"create", "append"}:
         return adapter_error("INVALID_PUBLISH_MODE", "PPT mode must be create or append.", [mode], warnings)
+    renderer = str(options.get("renderer") or options.get("ppt_renderer") or "pptx").lower()
+    if renderer != "xml":
+        pptx_result = _publish_pptx_draft(draft, options, warnings)
+        if pptx_result.get("ok") is True or options.get("fallback_to_xml") is False:
+            return pptx_result
+        warnings.extend(pptx_result.get("warnings") or [])
+        warnings.append("PPTX renderer failed; falling back to Feishu Slides XML.")
     if options.get("dry_run", True):
         warnings.append("PPTX export is not connected in v1; returning PPTDraft slides JSON.")
         slides_xml = [_slide_to_xml(slide, draft.get("theme") or {}, index + 1, len(draft["slides"])) for index, slide in enumerate(draft["slides"][:10])]
@@ -69,6 +81,15 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
     slides_xml = [_slide_to_xml(slide, draft.get("theme") or {}, index + 1, len(draft["slides"])) for index, slide in enumerate(draft["slides"][:10])]
     if mode == "append":
         return _append_slides_to_presentation(draft, slides_xml, options, warnings)
+    identity = str(options.get("as") or "user")
+    create_slides = slides_xml
+    append_after_create = False
+    slides_arg = json.dumps(create_slides, ensure_ascii=False, separators=(",", ":"))
+    if len(slides_arg) > 20000 and len(slides_xml) > 1:
+        warnings.append("Slides XML is large; creating first slide then appending the rest to avoid Windows command length limits.")
+        create_slides = slides_xml[:1]
+        append_after_create = True
+        slides_arg = json.dumps(create_slides, ensure_ascii=False, separators=(",", ":"))
     command = [
         cli_path,
         "slides",
@@ -76,9 +97,9 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
         "--title",
         draft["title"],
         "--slides",
-        json.dumps(slides_xml, ensure_ascii=False),
+        slides_arg,
         "--as",
-        str(options.get("as") or "user"),
+        identity,
     ]
     try:
         completed = subprocess.run(
@@ -100,11 +121,28 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
             warnings,
         )
     cli_data = parse_json_object(completed.stdout)
-    presentation_id = str((cli_data.get("data") or {}).get("xml_presentation_id") or "")
+    cli_payload = cli_data.get("data") or {}
+    presentation_id = str(cli_payload.get("xml_presentation_id") or "")
+    append_result = None
+    if append_after_create and presentation_id:
+        append_options = {
+            **options,
+            "presentation_id": presentation_id,
+            "revision_id": int(cli_payload.get("revision_id") or -1),
+            "as": identity,
+        }
+        append_result = _append_slides_to_presentation(draft, slides_xml[1:], append_options, warnings)
+        if append_result.get("ok") is not True:
+            return adapter_error(
+                "PPT_EXPORT_FAILED",
+                "lark-cli slides append after create failed",
+                append_result,
+                warnings,
+            )
     move_result = None
     folder_token = extract_folder_token(options.get("folder_token") or env_value("FEISHU_DOC_FOLDER_TOKEN"))
     if presentation_id and folder_token:
-        move_result = _move_slides_to_folder(cli_path, presentation_id, folder_token, str(options.get("as") or "user"))
+        move_result = _move_slides_to_folder(cli_path, presentation_id, folder_token, identity)
         if move_result.get("ok") is not True:
             warnings.append(f"PPT created but move to folder failed: {move_result.get('error')}")
     return {
@@ -112,11 +150,142 @@ def publish_ir_to_ppt(ir: dict, options: dict) -> dict:
         "mode": "create",
         "presentation_id": presentation_id or None,
         "url": (cli_data.get("data") or {}).get("url"),
+        "append_result": append_result,
         "move_result": move_result,
         "ppt_draft": draft,
         "slides_xml_preview": slides_xml,
         "cli_stdout": completed.stdout,
         "warnings": warnings,
+    }
+
+
+def _publish_pptx_draft(draft: dict, options: dict, warnings: list[str]) -> dict:
+    render_result = _render_pptx_with_node(draft, options)
+    if render_result.get("ok") is not True:
+        return adapter_error("PPTX_RENDER_FAILED", "pptxgenjs renderer failed.", render_result, warnings)
+    pptx_path = str(render_result.get("output") or "")
+    result = {
+        "ok": True,
+        "mode": "pptx",
+        "presentation_id": None,
+        "url": None,
+        "file_token": None,
+        "pptx_path": pptx_path,
+        "ppt_draft": draft,
+        "render_result": render_result,
+        "upload_result": None,
+        "warnings": warnings,
+    }
+    if options.get("dry_run", True):
+        warnings.append("Dry run: rendered PPTX locally without uploading to Feishu Drive.")
+        return result
+
+    folder_token = extract_folder_token(options.get("folder_token") or env_value("FEISHU_DOC_FOLDER_TOKEN"))
+    if not folder_token:
+        warnings.append("FEISHU_FOLDER_TOKEN_MISSING; rendered PPTX locally but did not upload.")
+        return result
+    upload_result = _upload_pptx_to_drive(pptx_path, folder_token, str(options.get("as") or "user"), draft["title"])
+    result["upload_result"] = upload_result
+    data = upload_result.get("json", {}).get("data") or upload_result.get("json", {})
+    result["file_token"] = data.get("file_token") or data.get("token")
+    result["url"] = data.get("url") or data.get("open_url")
+    if upload_result.get("ok") is not True:
+        warnings.append("PPTX rendered locally but upload to Feishu Drive failed.")
+    return result
+
+
+def _render_pptx_with_node(draft: dict, options: dict) -> dict:
+    repo_root = Path(__file__).resolve().parents[3]
+    renderer_path = repo_root / "packages" / "pptx_renderer" / "render-deck.mjs"
+    output_dir = repo_root / ".artifacts" / "pptx"
+    safe_title = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff._-]+", "_", str(draft.get("title") or "presentation")).strip("_")[:60]
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    input_path = output_dir / f"{stamp}-{safe_title or 'presentation'}.json"
+    output_path = output_dir / f"{stamp}-{safe_title or 'presentation'}.pptx"
+    asset_root = Path(str(options.get("asset_root") or repo_root)).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_path.write_text(json.dumps(draft, ensure_ascii=False, indent=2), encoding="utf-8")
+    command = [
+        "node",
+        str(renderer_path),
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+        "--asset-root",
+        str(asset_root),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=int(options.get("pptx_timeout_seconds") or 120),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "command": command}
+    data = parse_json_object(completed.stdout) or parse_json_object(completed.stderr)
+    if completed.returncode != 0:
+        return {
+            "ok": False,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "json": data,
+            "command": command,
+        }
+    return {
+        "ok": True,
+        "output": str(output_path),
+        "input": str(input_path),
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "json": data,
+        "bytes": output_path.stat().st_size if output_path.is_file() else 0,
+    }
+
+
+def _upload_pptx_to_drive(pptx_path: str, folder_token: str, identity: str, title: str) -> dict:
+    name = f"{str(title or 'Generated Presentation').strip() or 'Generated Presentation'}.pptx"
+    repo_root = Path(__file__).resolve().parents[3]
+    absolute = Path(pptx_path).resolve()
+    try:
+        relative = absolute.relative_to(repo_root)
+    except ValueError:
+        relative = absolute
+    completed = subprocess.run(
+        [
+            lark_cli_path(),
+            "drive",
+            "+upload",
+            "--file",
+            str(relative),
+            "--name",
+            name,
+            "--folder-token",
+            folder_token,
+            "--as",
+            identity,
+        ],
+        cwd=str(repo_root),
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+    return {
+        "ok": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "json": parse_json_object(completed.stdout),
+        "file_arg": str(relative),
     }
 
 
@@ -198,39 +367,44 @@ def _slide_to_xml(slide: dict, theme: dict | None = None, page: int = 1, total: 
     content = slide.get("content") if isinstance(slide.get("content"), dict) else {}
     tokens = theme_tokens(theme)
     background_hex = _slide_background_hex(layout, content, tokens)
+    render_tokens = dict(tokens)
+    render_tokens["body_title"] = readable_text_color(background_hex, tokens["body_title"])
+    render_tokens["body_text"] = readable_text_color(background_hex, tokens["body_text"])
+    render_tokens["body_muted"] = readable_text_color(background_hex, tokens["body_muted"])
     background = _rgb_hex(background_hex)
-    text_color = readable_text_color(background_hex, tokens["body_text"])
+    text_color = render_tokens["body_text"]
     shapes = [_background_shape(background), _title_shape(str(slide.get("title") or ""), text_color)]
 
     if layout == "cover":
         shapes = [_background_shape(background), *_cover_shapes(slide, content, tokens)]
     elif layout == "section_divider":
-        shapes = [_background_shape(background), *_section_shapes(slide, content, tokens)]
+        shapes = [_background_shape(background), *_section_shapes(slide, content, render_tokens)]
     elif layout == "metric_cards":
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_metric_card_shapes(content, tokens))
+        shapes.extend(_metric_card_shapes(content, render_tokens))
     elif layout in {"problem_cards", "cards"}:
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_card_grid_shapes(content.get("problems") or content.get("cards") or [], tokens))
+        shapes.extend(_card_grid_shapes(content.get("problems") or content.get("cards") or [], render_tokens))
     elif layout in {"three_stage_flow", "flow"}:
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_flow_shapes(content, tokens))
+        shapes.extend(_flow_shapes(content, render_tokens))
     elif layout == "timeline":
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_timeline_shapes(content, tokens))
+        shapes.extend(_timeline_shapes(content, render_tokens))
     elif layout in {"risk_table", "comparison_table", "table"}:
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_table_shapes(content, tokens))
+        shapes.extend(_table_shapes(content, render_tokens))
     elif layout == "summary_next_steps":
         shapes.extend(_content_theme_chrome(tokens))
-        shapes.extend(_summary_shapes(content, tokens))
+        shapes.extend(_summary_shapes(content, render_tokens))
     else:
         shapes.extend(_content_theme_chrome(tokens))
         shapes.append(_text_shape(90, 170, 780, 320, _slide_body_lines(slide), "body", color=text_color))
 
     if len(shapes) == 2:
         shapes.append(_text_shape(90, 170, 780, 320, _content_summary_lines(content), "body", color=text_color))
-    shapes.append(_footer_shape(page, total, readable_text_color(background_hex, tokens["body_muted"])))
+    footer_color = tokens["cover_muted"] if layout == "cover" else readable_text_color(background_hex, tokens["body_muted"])
+    shapes.append(_footer_shape(page, total, footer_color))
     return (
         '<slide xmlns="http://www.larkoffice.com/sml/2.0">'
         f'<style><fill><fillColor color="{background}"/></fill></style>'
@@ -323,6 +497,80 @@ def _slide_background_hex(layout: str, content: dict, tokens: dict) -> str:
     return tokens["background"]
 
 
+def normalize_hex_color(color: str, fallback: str) -> str:
+    text = str(color or "").strip()
+    match = re.match(r"^#?([0-9A-Fa-f]{6})$", text)
+    if not match:
+        fallback_text = str(fallback or "").strip()
+        match = re.match(r"^#?([0-9A-Fa-f]{6})$", fallback_text)
+    return match.group(1).upper() if match else "0F172A"
+
+
+def relative_luminance(hex_color: str) -> float:
+    normalized = normalize_hex_color(hex_color, "0F172A")
+    channels = [int(normalized[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+
+    def linearize(value: float) -> float:
+        if value <= 0.03928:
+            return value / 12.92
+        return ((value + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = [linearize(channel) for channel in channels]
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def readable_text_color(background_hex: str, prefer: str | None = None) -> str:
+    background = normalize_hex_color(background_hex, "FFFFFF")
+    bg_luminance = relative_luminance(background)
+    if bg_luminance < 0.42:
+        return "FFFFFF"
+
+    preferred = normalize_hex_color(prefer or "0F172A", "0F172A")
+    preferred_contrast = _contrast_ratio(background, preferred)
+    if preferred_contrast >= 4.5:
+        return preferred
+    dark_contrast = _contrast_ratio(background, "0F172A")
+    light_contrast = _contrast_ratio(background, "FFFFFF")
+    return "0F172A" if dark_contrast >= light_contrast else "FFFFFF"
+
+
+def theme_tokens(theme: dict) -> dict[str, str]:
+    raw = theme if isinstance(theme, dict) else {}
+    accent = normalize_hex_color(str(raw.get("accent") or ""), "2563EB")
+    accent2 = normalize_hex_color(str(raw.get("accent2") or ""), "0F766E")
+    background = normalize_hex_color(str(raw.get("background") or ""), "F8FAFC")
+    surface = normalize_hex_color(str(raw.get("surface") or ""), "FFFFFF")
+    text = normalize_hex_color(str(raw.get("text") or ""), "0F172A")
+    muted = normalize_hex_color(str(raw.get("muted") or ""), "64748B")
+    cover_bg = normalize_hex_color(str(raw.get("cover_bg") or raw.get("text") or ""), text)
+    if relative_luminance(cover_bg) >= 0.42:
+        cover_bg = text if relative_luminance(text) < 0.42 else "0F172A"
+    return {
+        "accent": accent,
+        "accent2": accent2,
+        "background": background,
+        "surface": surface,
+        "text": text,
+        "muted": muted,
+        "warning": normalize_hex_color(str(raw.get("warning") or ""), "F97316"),
+        "cover_bg": cover_bg,
+        "cover_title": "FFFFFF",
+        "cover_subtitle": "E2E8F0",
+        "cover_muted": "CBD5E1",
+        "body_title": normalize_hex_color(str(raw.get("body_title") or ""), text),
+        "body_text": normalize_hex_color(str(raw.get("body_text") or ""), text),
+        "body_muted": normalize_hex_color(str(raw.get("body_muted") or ""), muted),
+    }
+
+
+def _contrast_ratio(first_hex: str, second_hex: str) -> float:
+    first = relative_luminance(first_hex)
+    second = relative_luminance(second_hex)
+    lighter = max(first, second)
+    darker = min(first, second)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 def _background_shape(color: str) -> str:
     return _rect_shape(0, 0, 960, 540, color)
 
@@ -330,20 +578,23 @@ def _background_shape(color: str) -> str:
 def _metric_card_shapes(content: dict, tokens: dict) -> list[str]:
     items = _content_metrics(content)
     shapes = []
+    surface_text = readable_text_color(tokens["surface"], tokens["text"])
+    surface_muted = readable_text_color(tokens["surface"], tokens["muted"])
     for index, item in enumerate(items[:4]):
         x = 80 + index * 210
         tone = tokens["accent2"] if index % 2 else tokens["accent"]
         shapes.append(_rect_shape(x, 168, 180, 176, _rgb_hex(tokens["surface"])))
         shapes.append(_rect_shape(x, 168, 180, 10, _rgb_hex(tone)))
-        shapes.append(_text_shape(x + 18, 194, 145, 42, [str(item.get("label") or "")], "caption", color=tokens["body_muted"]))
+        shapes.append(_text_shape(x + 18, 194, 145, 42, [str(item.get("label") or "")], "caption", color=surface_muted))
         shapes.append(_text_shape(x + 18, 242, 145, 58, [str(item.get("value") or "")], "metric", color=tokens["accent"], font_size=28))
-        shapes.append(_text_shape(x + 18, 306, 145, 34, [str(item.get("note") or "")], "small", color=tokens["body_muted"]))
+        shapes.append(_text_shape(x + 18, 306, 145, 34, [str(item.get("note") or "")], "small", color=surface_muted))
     return shapes or [_text_shape(90, 170, 780, 260, _string_items(content.get("items") or []), "body", color=tokens["body_text"])]
 
 
 def _card_grid_shapes(cards: Any, tokens: dict) -> list[str]:
     normalized = _content_cards(cards)
     shapes = []
+    surface_text = readable_text_color(tokens["surface"], tokens["text"])
     positions = [(80, 160), (360, 160), (640, 160), (80, 345), (360, 345), (640, 345)]
     for index, card in enumerate(normalized[:6]):
         x, y = positions[index]
@@ -351,7 +602,7 @@ def _card_grid_shapes(cards: Any, tokens: dict) -> list[str]:
         shapes.append(_rect_shape(x, y, 240, 145, _rgb_hex(tokens["surface"])))
         shapes.append(_rect_shape(x, y, 8, 145, _rgb_hex(tone)))
         shapes.append(_text_shape(x + 20, y + 18, 195, 46, [str(card.get("title") or "")], "subtitle", color=tokens["accent"]))
-        shapes.append(_text_shape(x + 20, y + 72, 195, 58, [str(card.get("body") or "")], "small", color=tokens["body_text"]))
+        shapes.append(_text_shape(x + 20, y + 72, 195, 58, [str(card.get("body") or "")], "small", color=surface_text))
     return shapes
 
 
@@ -367,6 +618,7 @@ def _flow_shapes(content: dict, tokens: dict) -> list[str]:
     )
     normalized = _content_cards(steps)
     shapes = []
+    surface_text = readable_text_color(tokens["surface"], tokens["text"])
     count = min(len(normalized), 4)
     if not count:
         return shapes
@@ -381,7 +633,7 @@ def _flow_shapes(content: dict, tokens: dict) -> list[str]:
         shapes.append(_rect_shape(x, y, card_w, 148, _rgb_hex(tokens["surface"])))
         shapes.append(_rect_shape(x, y, card_w, 12, _rgb_hex(tone)))
         shapes.append(_text_shape(x + 16, y + 24, card_w - 32, 58, [str(step.get("title") or f"Step {index + 1}")], "subtitle", color=tokens["accent"]))
-        shapes.append(_text_shape(x + 16, y + 88, card_w - 32, 48, [str(step.get("body") or "")], "small", color=tokens["body_text"]))
+        shapes.append(_text_shape(x + 16, y + 88, card_w - 32, 48, [str(step.get("body") or "")], "small", color=surface_text))
         if index < count - 1:
             shapes.append(_text_shape(x + card_w + 8, y + 57, max(24, gap - 16), 30, ["->"], "subtitle", color=tokens["accent"]))
     return shapes
@@ -484,9 +736,9 @@ def _text_shape(
 
 def _rect_shape(x: int, y: int, width: int, height: int, color: str) -> str:
     return (
-        f'<shape type="text" topLeftX="{x}" topLeftY="{y}" width="{width}" height="{height}">'
+        f'<shape type="rect" topLeftX="{x}" topLeftY="{y}" width="{width}" height="{height}">'
         f'<style><fill><fillColor color="{color}"/></fill></style>'
-        f'<content textType="body"><p><span style="font-size:1px;color:{color}">&#8203;</span></p></content>'
+        "<content><p></p></content>"
         "</shape>"
     )
 
@@ -508,6 +760,14 @@ def _span_style(color: str | None = None, font_size: int | None = None) -> str:
     if color:
         parts.append(f"color:{_rgb_hex(color)}")
     return ";".join(parts)
+
+
+def _rgb_hex(value: Any) -> str:
+    return _rgb(normalize_hex_color(str(value or ""), "F8FAFC"))
+
+
+def _hex_color(value: Any, default: str) -> str:
+    return f"#{normalize_hex_color(str(value or ''), str(default or 'F8FAFC'))}"
 
 
 def _rgb(value: Any) -> str:

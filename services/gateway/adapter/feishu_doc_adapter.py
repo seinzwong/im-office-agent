@@ -106,6 +106,7 @@ def publish_ir_to_feishu_doc(ir: dict, options: dict) -> dict:
             "ok": True,
             "mode": mode,
             "document_id": document_id,
+            "url": _docx_url(config["base_url"], document_id),
             "auth_mode": client.auth_mode,
             "warnings": warnings,
         }
@@ -223,8 +224,9 @@ class FeishuDocClient:
         return data.get("data") or {}
 
     def create_blocks(self, document_id: str, children: list[dict]) -> dict:
+        parent_id = self.page_block_id(document_id)
         response = httpx.post(
-            f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children",
+            f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks/{parent_id}/children",
             headers=self.authorization_header(),
             json={"children": children, "index": -1},
             timeout=30.0,
@@ -234,6 +236,28 @@ class FeishuDocClient:
         if data.get("code") not in (None, 0):
             raise RuntimeError(str(data))
         return data.get("data") or {}
+
+    def page_block_id(self, document_id: str) -> str:
+        response = httpx.get(
+            f"{self.base_url}/open-apis/docx/v1/documents/{document_id}/blocks",
+            headers=self.authorization_header(),
+            params={"page_size": 80},
+            timeout=30.0,
+        )
+        _raise_for_feishu_error(response)
+        data = response.json()
+        if data.get("code") not in (None, 0):
+            return document_id
+        items = (data.get("data") or {}).get("items") or []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            block = item.get("block")
+            if isinstance(block, dict) and block.get("block_type") == 1:
+                block_id = str(block.get("block_id") or "").strip()
+                if block_id:
+                    return block_id
+        return document_id
 
 
 def _resolve_document_id(client: FeishuDocClient, ir: dict, options: dict, config: dict, mode: str, warnings: list[str]) -> str:
@@ -318,6 +342,14 @@ def _extract_document_id(value: Any) -> str:
         document.get("token") if isinstance(document, dict) else None,
     ]
     return next((str(candidate).strip() for candidate in candidates if str(candidate or "").strip()), "")
+
+
+def _docx_url(base_url: str, document_id: str) -> str:
+    if not document_id:
+        return ""
+    if "larksuite" in (base_url or "").lower():
+        return f"https://www.larksuite.com/docx/{document_id}"
+    return f"https://www.feishu.cn/docx/{document_id}"
 
 
 def _raise_for_feishu_error(response: httpx.Response) -> None:

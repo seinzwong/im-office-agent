@@ -23,6 +23,13 @@ lark_app_secret: ""
 lark_event_encrypt_key: ""
 lark_verification_token: ""
 
+# 可选：用用户 token 在用户有权限的文件夹里创建文档；留空则使用应用 tenant_access_token
+feishu_user_access_token: ""
+
+# 用户 OAuth scope 与 token 本地存储；scope 留空时使用代码内默认值
+oauth_user_scopes: ""
+oauth_token_store_path: ".artifacts/auth/user_tokens.json"
+
 # 前端 H5 与 OAuth；须与开放平台「网页应用」域名/回调一致
 public_web_base_url: http://127.0.0.1:5173
 oauth_redirect_uri: http://127.0.0.1:8000/api/v1/auth/callback
