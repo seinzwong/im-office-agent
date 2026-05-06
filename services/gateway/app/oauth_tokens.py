@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 DEFAULT_USER_SCOPES = (
     "contact:user.base:readonly",
     "offline_access",
+    "docx:document:readonly",
     "docx:document:create",
     "docx:document:write_only",
     "drive:file:upload",

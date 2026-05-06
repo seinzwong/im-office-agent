@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 
 IR_SCHEMA_VERSION = "0.2.0"
+SUPPORTED_REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh"}
+REASONING_EFFORT_ALIASES = {"minimal": "low"}
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,7 @@ class AgentSettings:
     api_key: str
     model: str
     ppt_model: str
+    reasoning_effort: str
     timeout_seconds: float = 60.0
     temperature: float = 0.2
     max_tokens: int = 3000
@@ -30,6 +33,7 @@ def get_agent_settings() -> AgentSettings:
         api_key=_env_value(env, "AGENT_LLM_API_KEY"),
         model=_env_value(env, "AGENT_LLM_MODEL"),
         ppt_model=_env_value(env, "AGENT_PPT_LLM_MODEL", "gpt-5.2"),
+        reasoning_effort=_reasoning_effort_value(env, "AGENT_LLM_REASONING_EFFORT", "low"),
         timeout_seconds=float(_env_value(env, "AGENT_LLM_TIMEOUT_SECONDS", "60")),
         temperature=float(_env_value(env, "AGENT_LLM_TEMPERATURE", "0.2")),
         max_tokens=int(_env_value(env, "AGENT_LLM_MAX_TOKENS", "6000")),
@@ -85,6 +89,14 @@ def _env_value(env: dict[str, str], name: str, default: str = "") -> str:
     if raw is None or not raw.strip():
         return default
     return raw.strip()
+
+
+def _reasoning_effort_value(env: dict[str, str], name: str, default: str = "low") -> str:
+    value = _env_value(env, name, default).lower()
+    value = REASONING_EFFORT_ALIASES.get(value, value)
+    if value in SUPPORTED_REASONING_EFFORTS:
+        return value
+    return default
 
 
 __all__ = [

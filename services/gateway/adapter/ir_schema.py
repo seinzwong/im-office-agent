@@ -113,6 +113,8 @@ def validate_ir(ir: dict) -> list[str]:
             seen_ids.add(block_id)
         if kind not in ALLOWED_BLOCK_KINDS:
             errors.append(f"Unsupported block kind: {kind}.")
+        elif not _block_has_renderable_content(block):
+            errors.append(f"Block {block_id or index} has no renderable content for kind {kind}.")
         if kind == "flow":
             _validate_flow(block, block_id or f"blocks[{index}]", errors)
         elif kind == "table":
@@ -149,3 +151,28 @@ def _validate_flow(block: dict[str, Any], block_id: str, errors: list[str]) -> N
             continue
         if str(source) not in node_ids or str(target) not in node_ids:
             errors.append(f"Flow block {block_id} edge references missing node id.")
+
+
+def _block_has_renderable_content(block: dict[str, Any]) -> bool:
+    kind = str(block.get("kind") or "").strip()
+    if kind == "cover":
+        return bool(str(block.get("subtitle") or block.get("kicker") or block.get("title") or "").strip())
+    if kind == "split":
+        return bool(_non_empty_list(block.get("points")))
+    if kind == "flow":
+        return bool(_non_empty_list(block.get("nodes")))
+    if kind == "metrics":
+        return bool(_non_empty_list(block.get("items")))
+    if kind == "cards":
+        return bool(_non_empty_list(block.get("cards")))
+    if kind == "table":
+        return bool(_non_empty_list(block.get("columns")) or _non_empty_list(block.get("rows")))
+    if kind == "timeline":
+        return bool(_non_empty_list(block.get("events")))
+    if kind == "image":
+        return bool(str(block.get("caption") or block.get("image") or "").strip())
+    return False
+
+
+def _non_empty_list(value: Any) -> bool:
+    return isinstance(value, list) and len(value) > 0

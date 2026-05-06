@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from datetime import date
 from typing import Any
@@ -12,6 +13,7 @@ from fastapi.responses import Response
 from services.agent.agents import generate_ir_from_messages
 
 app = FastAPI(title="IM Office PlanB Agent", version="0.2.0")
+log = logging.getLogger(__name__)
 
 
 @app.get("/healthz")
@@ -37,6 +39,12 @@ def invoke_endpoint(
     action = str(envelope.get("action") or "")
     payload = envelope.get("payload") if isinstance(envelope.get("payload"), dict) else {}
     request_id = str(envelope.get("request_id") or "")
+    log.info(
+        "agent invoke: action=%s request_id=%s messages=%s",
+        action,
+        request_id,
+        len(payload.get("messages") or []) if isinstance(payload.get("messages"), list) else 0,
+    )
 
     if action == "summary_from_chat":
         result = _summary_from_chat(payload)
@@ -51,6 +59,22 @@ def invoke_endpoint(
                 "request_id": request_id,
                 "ok": False,
                 "error": {"code": "UNKNOWN_ACTION", "message": f"Unknown action: {action}"},
+            }
+        )
+
+    if isinstance(result, dict) and result.get("ok") is False:
+        return _json_response(
+            {
+                "protocol_version": 1,
+                "request_id": request_id,
+                "ok": False,
+                "error": result.get("error")
+                or {"code": "AGENT_ACTION_FAILED", "message": f"Action failed: {action}"},
+                "result": {
+                    key: value
+                    for key, value in result.items()
+                    if key not in {"ok", "error"}
+                },
             }
         )
 
@@ -99,10 +123,24 @@ def _summary_from_chat(payload: dict[str, Any]) -> dict[str, Any]:
             "ir": result["ir"],
             "warnings": result.get("warnings") or [],
         }
+    error = result.get("error") if isinstance(result.get("error"), dict) else {}
+    log.error(
+        "summary_from_chat failed: code=%s message=%s details=%s debug=%s",
+        error.get("code"),
+        error.get("message"),
+        error.get("details"),
+        result.get("debug"),
+    )
     return {
+        "ok": False,
         "time_window": payload.get("time_window") or {},
-        "ir": _fallback_summary_ir(request, chat_id),
-        "warnings": [*(result.get("warnings") or []), "Fell back to deterministic summary IR."],
+        "warnings": result.get("warnings") or [],
+        "debug": result.get("debug") or {},
+        "error": error
+        or {
+            "code": "SUMMARY_IR_FAILED",
+            "message": "generate_ir_from_messages failed.",
+        },
     }
 
 

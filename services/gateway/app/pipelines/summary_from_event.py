@@ -56,6 +56,8 @@ def run_summary_command(
 
     try:
         agent_result = _invoke_summary_ir(chat_id, messages, start_unix, end_unix, source_message_id)
+        if not isinstance(agent_result, dict) or agent_result.get("ok") is not True:
+            raise RuntimeError(_agent_error_message(agent_result))
         ir = (agent_result.get("result") or {}).get("ir") if isinstance(agent_result, dict) else None
         if not isinstance(ir, dict):
             raise RuntimeError("Agent did not return result.ir")
@@ -80,6 +82,19 @@ def run_summary_command(
         doc_result = (publish_result.get("publish_result") or {}).get("doc") or {}
         if publish_result.get("ok") is not True or doc_result.get("ok") is not True:
             error = publish_result.get("error") or doc_result.get("error") or publish_result
+            if _requires_user_reauthorization(error):
+                _safe_reply(
+                    s,
+                    source_message_id,
+                    _auth_required_text(trigger_user_id, build_oauth_login_url(s, trigger_user_id, "summary")),
+                )
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "USER_AUTH_REQUIRED",
+                        "message": "User OAuth token lacks required Feishu document scopes.",
+                    },
+                }
             message = str(error)
             if "no folder permission" in message or "1770040" in message:
                 message = (
@@ -91,6 +106,19 @@ def run_summary_command(
         open_url = str(doc_result.get("url") or docx_open_url(s, document_id) or "")
     except Exception as exc:  # noqa: BLE001
         log.exception("publish IR doc failed: %s", exc)
+        if _requires_user_reauthorization(exc):
+            _safe_reply(
+                s,
+                source_message_id,
+                _auth_required_text(trigger_user_id, build_oauth_login_url(s, trigger_user_id, "summary")),
+            )
+            return {
+                "ok": False,
+                "error": {
+                    "code": "USER_AUTH_REQUIRED",
+                    "message": "User OAuth token lacks required Feishu document scopes.",
+                },
+            }
         _safe_reply(
             s,
             source_message_id,
@@ -151,6 +179,32 @@ def _invoke_summary_ir(
             },
         },
         trace_id=f"summary-{source_message_id}",
+    )
+
+
+def _agent_error_message(agent_result: Any) -> str:
+    if not isinstance(agent_result, dict):
+        return f"Agent returned invalid response: {agent_result!r}"
+    error = agent_result.get("error")
+    if not isinstance(error, dict):
+        return f"Agent failed: {agent_result!r}"
+    code = str(error.get("code") or "AGENT_FAILED")
+    message = str(error.get("message") or "")
+    details = error.get("details")
+    suffix = f" details={details!r}" if details is not None else ""
+    return f"{code}: {message}{suffix}"
+
+
+def _requires_user_reauthorization(error: Any) -> bool:
+    text = str(error)
+    return (
+        "99991679" in text
+        and (
+            "docx:document" in text
+            or "docx:document:readonly" in text
+            or "docx:document:create" in text
+            or "docx:document:write_only" in text
+        )
     )
 
 

@@ -39,6 +39,10 @@ Rules:
 - blocks must be non-empty and use only these kinds: cover, split, flow,
   metrics, cards, table, timeline, image.
 - Return {"ir": {...}, "warnings": ["..."]}.
+- Every block must include all schema keys. For unused fields, return "" or [].
+- Do not create empty content blocks: split.points, flow.nodes, metrics.items,
+  cards.cards, table.rows, timeline.events, or image.caption/image must contain
+  useful content when that kind is used.
 """
 
 CONTENT_IR_PROMPT = """You are the Content Agent in PlanB.
@@ -235,6 +239,153 @@ CONTENT_IR_RESPONSE_SCHEMA = {
     },
 }
 
+ARTIFACT_IR_RESPONSE_SCHEMA = {
+    "name": "planb_artifact_ir_response",
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["ir", "warnings"],
+        "properties": {
+            "warnings": {"type": "array", "items": {"type": "string"}},
+            "ir": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["schemaVersion", "docId", "meta", "theme", "assets", "blocks"],
+                "properties": {
+                    "schemaVersion": {"type": "string", "enum": [IR_SCHEMA_VERSION]},
+                    "docId": {"type": "string"},
+                    "meta": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["title", "subtitle", "owner", "date", "audience"],
+                        "properties": {
+                            "title": {"type": "string"},
+                            "subtitle": {"type": "string"},
+                            "owner": {"type": "string"},
+                            "date": {"type": "string"},
+                            "audience": {"type": "string"},
+                        },
+                    },
+                    "theme": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "name",
+                            "accent",
+                            "accent2",
+                            "background",
+                            "surface",
+                            "text",
+                            "muted",
+                            "success",
+                            "warning",
+                            "fontFace",
+                        ],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "accent": {"type": "string"},
+                            "accent2": {"type": "string"},
+                            "background": {"type": "string"},
+                            "surface": {"type": "string"},
+                            "text": {"type": "string"},
+                            "muted": {"type": "string"},
+                            "success": {"type": "string"},
+                            "warning": {"type": "string"},
+                            "fontFace": {"type": "string"},
+                        },
+                    },
+                    "assets": {"type": "object", "additionalProperties": False, "properties": {}},
+                    "blocks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "id",
+                                "kind",
+                                "title",
+                                "subtitle",
+                                "kicker",
+                                "points",
+                                "nodes",
+                                "edges",
+                                "items",
+                                "cards",
+                                "columns",
+                                "rows",
+                                "events",
+                                "caption",
+                                "image",
+                            ],
+                            "properties": {
+                                "id": {"type": "string"},
+                                "kind": {
+                                    "type": "string",
+                                    "enum": ["cover", "split", "flow", "metrics", "cards", "table", "timeline", "image"],
+                                },
+                                "title": {"type": "string"},
+                                "subtitle": {"type": "string"},
+                                "kicker": {"type": "string"},
+                                "points": {"type": "array", "items": {"type": "string"}},
+                                "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                                "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+                                "items": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
+                                "cards": {"type": "array", "items": {"$ref": "#/$defs/card_body"}},
+                                "columns": {"type": "array", "items": {"type": "string"}},
+                                "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                                "events": {"type": "array", "items": {"$ref": "#/$defs/event_body"}},
+                                "caption": {"type": "string"},
+                                "image": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "$defs": {
+            "node": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["id", "label"],
+                "properties": {"id": {"type": "string"}, "label": {"type": "string"}},
+            },
+            "edge": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["from", "to"],
+                "properties": {"from": {"type": "string"}, "to": {"type": "string"}},
+            },
+            "metric": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["label", "value", "note"],
+                "properties": {
+                    "label": {"type": "string"},
+                    "value": {"type": "string"},
+                    "note": {"type": "string"},
+                },
+            },
+            "card_body": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "body"],
+                "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
+            },
+            "event_body": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["date", "title", "body"],
+                "properties": {
+                    "date": {"type": "string"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
 SLIDE_CONTENT_PROPERTIES = {
     "subtitle": {"type": "string"},
     "kicker": {"type": "string"},
@@ -395,9 +546,32 @@ def generate_ir_from_messages(request: dict) -> dict:
         return _finish("generate_ir", llm_result, started_at)
 
     ir = _extract_ir(llm_result.get("data") or {})
+    ir = _coerce_artifact_ir(ir)
     ir = _ensure_ir_defaults(ir, payload)
     validation = _validate_ir(ir)
     if validation:
+        fallback_ir = _summary_ir_from_request(payload)
+        fallback_validation = _validate_ir(fallback_ir)
+        if not fallback_validation:
+            return _finish(
+                "done",
+                {
+                    "ok": True,
+                    "ir": fallback_ir,
+                    "warnings": _dedupe(
+                        [
+                            *warnings,
+                            "LLM returned invalid IR; generated a conservative summary IR from scoped messages.",
+                        ]
+                    ),
+                    "debug": {
+                        **_as_dict(llm_result.get("debug")),
+                        "llm_ir_validation": validation,
+                        "fallback_ir": True,
+                    },
+                },
+                started_at,
+            )
         return _finish(
             "generate_ir",
             _error("AGENT_IR_INVALID", "LLM returned invalid IR.", validation, warnings),
@@ -499,7 +673,13 @@ def generate_slide_draft_from_content_ir(content_ir: dict, options: dict | None 
 def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
     options = _as_dict(payload.get("options"))
     model_override = str(options.get("llm_model") or options.get("model") or "").strip() or None
-    return _call_llm_json(payload, PLANB_IR_PROMPT, model_override=model_override, purpose="artifact_ir")
+    return _call_llm_json(
+        payload,
+        PLANB_IR_PROMPT,
+        ARTIFACT_IR_RESPONSE_SCHEMA,
+        model_override=model_override,
+        purpose="artifact_ir",
+    )
 
 
 def _call_llm_json(
@@ -517,6 +697,7 @@ def _call_llm_json(
         "llm_provider": settings.provider,
         "llm_model": model,
         "llm_purpose": purpose,
+        "llm_reasoning_effort": settings.reasoning_effort,
     }
     missing = [
         name
@@ -544,6 +725,8 @@ def _call_llm_json(
         "response_format": _response_format(response_schema),
     }
     request_body[_token_limit_param(model)] = settings.max_tokens
+    if _supports_reasoning_effort(model) and settings.reasoning_effort:
+        request_body["reasoning_effort"] = settings.reasoning_effort
     if _supports_temperature(model):
         request_body["temperature"] = settings.temperature
 
@@ -559,6 +742,7 @@ def _call_llm_json(
         )
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
+        details = _httpx_exception_details(exc)
         if response_schema:
             fallback = _call_llm_json(
                 payload,
@@ -574,13 +758,13 @@ def _call_llm_json(
                 ]
                 fallback["debug"] = {
                     **_as_dict(fallback.get("debug")),
-                    "json_schema_error": str(exc),
+                    "json_schema_error": details,
                 }
                 return fallback
         return _error(
             "AGENT_LLM_CALL_FAILED",
             "Agent LLM call failed.",
-            str(exc),
+            details,
             debug={**debug, "llm_elapsed_ms": _elapsed_ms(started_at)},
         )
 
@@ -663,6 +847,23 @@ def _supports_temperature(model: str) -> bool:
     return not (normalized.startswith("gpt-5") or normalized.startswith("o"))
 
 
+def _supports_reasoning_effort(model: str) -> bool:
+    normalized = model.lower()
+    return normalized.startswith("gpt-5") or normalized.startswith("o")
+
+
+def _httpx_exception_details(exc: Exception) -> Any:
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        body = (response.text or "").strip()
+        return {
+            "message": str(exc),
+            "status_code": response.status_code,
+            "response_body": body[:2000],
+        }
+    return str(exc)
+
+
 def _safe_json_preview(value: Any, limit: int = 2000) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False)
@@ -678,6 +879,228 @@ def _extract_ir(data: JsonDict) -> JsonDict:
     if data.get("schemaVersion") == IR_SCHEMA_VERSION:
         return data
     return {}
+
+
+def _coerce_artifact_ir(ir: JsonDict) -> JsonDict:
+    if not isinstance(ir, dict):
+        return {}
+    out = json.loads(json.dumps(ir, ensure_ascii=False))
+    blocks = out.get("blocks")
+    if not isinstance(blocks, list):
+        return out
+    out["blocks"] = [
+        _coerce_artifact_block(block, index)
+        for index, block in enumerate(blocks)
+        if isinstance(block, dict)
+    ]
+    return out
+
+
+def _coerce_artifact_block(block: JsonDict, index: int) -> JsonDict:
+    out = dict(block)
+    block_id = str(out.get("id") or out.get("block_id") or "").strip()
+    if not block_id:
+        block_id = f"block_{index + 1}"
+    out["id"] = block_id
+
+    title = str(
+        out.get("title")
+        or out.get("heading")
+        or out.get("name")
+        or out.get("label")
+        or block_id
+    ).strip()
+    out["title"] = title or block_id
+
+    kind = _canonical_block_kind(
+        str(out.get("kind") or out.get("type") or out.get("layout") or "").strip(),
+        out,
+    )
+    out["kind"] = kind
+
+    content = out.get("content")
+    if kind == "split":
+        points = _string_list_from_any(
+            out.get("points")
+            or out.get("bullets")
+            or out.get("items")
+            or out.get("summary")
+            or out.get("body")
+            or out.get("description")
+            or content
+        )
+        if points:
+            out["points"] = points
+    elif kind == "cards":
+        cards = _card_list_from_any(
+            out.get("cards")
+            or out.get("items")
+            or out.get("problems")
+            or out.get("solutions")
+            or out.get("modules")
+            or content
+        )
+        if cards:
+            out["cards"] = cards
+    elif kind == "metrics":
+        items = _metric_list_from_any(out.get("items") or out.get("metrics") or out.get("cards") or content)
+        if items:
+            out["items"] = items
+    elif kind == "table":
+        if not isinstance(out.get("columns"), list):
+            out["columns"] = _string_list_from_any(out.get("columns") or out.get("headers"))
+        if not isinstance(out.get("rows"), list):
+            out["rows"] = _rows_from_any(out.get("rows") or out.get("items") or content)
+    elif kind == "timeline":
+        events = _event_list_from_any(out.get("events") or out.get("items") or out.get("timeline") or content)
+        if events:
+            out["events"] = events
+    elif kind == "flow":
+        if not isinstance(out.get("nodes"), list):
+            out["nodes"] = _flow_nodes_from_any(out.get("nodes") or out.get("steps") or out.get("items") or content)
+        if not isinstance(out.get("edges"), list):
+            out["edges"] = _linear_edges_for_nodes(out.get("nodes"))
+    return out
+
+
+def _canonical_block_kind(value: str, block: JsonDict) -> str:
+    normalized = value.lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "section": "split",
+        "paragraph": "split",
+        "summary": "split",
+        "bullets": "split",
+        "bullet": "split",
+        "text": "split",
+        "card": "cards",
+        "metric": "metrics",
+        "process": "flow",
+        "steps": "flow",
+        "roadmap": "timeline",
+    }
+    if normalized in ALLOWED_BLOCK_KINDS:
+        return normalized
+    if normalized in aliases:
+        return aliases[normalized]
+    if isinstance(block.get("nodes"), list) or isinstance(block.get("steps"), list):
+        return "flow"
+    if isinstance(block.get("metrics"), list):
+        return "metrics"
+    if isinstance(block.get("cards"), list) or isinstance(block.get("problems"), list):
+        return "cards"
+    if isinstance(block.get("columns"), list) or isinstance(block.get("rows"), list):
+        return "table"
+    if isinstance(block.get("events"), list) or isinstance(block.get("timeline"), list):
+        return "timeline"
+    return "split"
+
+
+def _flow_nodes_from_any(value: Any) -> list[JsonDict]:
+    nodes = []
+    for index, item in enumerate(value if isinstance(value, list) else []):
+        if isinstance(item, dict):
+            node_id = str(item.get("id") or item.get("key") or f"n{index + 1}")
+            label = str(item.get("label") or item.get("title") or item.get("name") or item.get("body") or node_id)
+        else:
+            text = str(item).strip()
+            if not text:
+                continue
+            node_id = f"n{index + 1}"
+            label = text
+        nodes.append({"id": node_id, "label": label})
+    return nodes
+
+
+def _linear_edges_for_nodes(nodes: Any) -> list[JsonDict]:
+    if not isinstance(nodes, list):
+        return []
+    ids = [str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")]
+    return [{"from": ids[index], "to": ids[index + 1]} for index in range(len(ids) - 1)]
+
+
+def _summary_ir_from_request(request: JsonDict) -> JsonDict:
+    task = _as_dict(request.get("task"))
+    messages = [message for message in _as_list(request.get("messages")) if isinstance(message, dict)]
+    title = str(task.get("title") or _infer_title_from_request(request)).strip() or "群聊目标与方案总结"
+    goal = str(task.get("goal") or "").strip()
+    audience = str(task.get("audience") or "").strip() or "群聊成员"
+    snippets = _message_snippets(messages, limit=8)
+    body = "\n".join(snippets) or "本次时间窗内没有可用的文本消息。"
+    action_items = _derive_action_items(snippets)
+    return {
+        "schemaVersion": IR_SCHEMA_VERSION,
+        "docId": f"{_safe_id(str(task.get('task_id') or 'summary'))}_ir",
+        "meta": {
+            "title": title,
+            "subtitle": goal or "基于群聊消息生成的摘要。",
+            "owner": "Agent",
+            "date": date.today().isoformat(),
+            "audience": audience,
+        },
+        "theme": _default_theme(),
+        "assets": {},
+        "blocks": [
+            {
+                "id": "cover",
+                "kind": "cover",
+                "title": title,
+                "subtitle": goal or "整理主要目标、共识、问题与下一步。",
+            },
+            {
+                "id": "message_evidence",
+                "kind": "split",
+                "title": "群聊消息依据",
+                "points": snippets or [body],
+            },
+            {
+                "id": "summary_points",
+                "kind": "cards",
+                "title": "目标与方案要点",
+                "cards": [
+                    {"title": "主要目标", "body": goal or _truncate(body, 180)},
+                    {"title": "当前共识", "body": "以群聊消息为依据生成可发布的飞书文档，并保留后续人工校对空间。"},
+                    {"title": "待确认问题", "body": "模型输出、消息范围、负责人和具体交付标准需要结合群内上下文确认。"},
+                ],
+            },
+            {
+                "id": "next_steps",
+                "kind": "timeline",
+                "title": "下一步",
+                "events": [
+                    {"date": "现在", "title": item["title"], "body": item["body"]}
+                    for item in action_items
+                ],
+            },
+        ],
+    }
+
+
+def _message_snippets(messages: list[JsonDict], limit: int = 8) -> list[str]:
+    snippets = []
+    for message in messages:
+        text = str(message.get("text") or "").strip()
+        if not text:
+            continue
+        sender = str(message.get("sender") or message.get("sender_name") or "成员").strip()
+        snippets.append(f"{sender}: {_truncate(text, 180)}")
+        if len(snippets) >= limit:
+            break
+    return snippets
+
+
+def _derive_action_items(snippets: list[str]) -> list[JsonDict]:
+    if not snippets:
+        return [{"title": "补充上下文", "body": "提供更完整的群聊消息后重新生成总结。"}]
+    return [
+        {"title": "复核目标", "body": "确认文档标题、目标、受众和交付格式是否符合群聊意图。"},
+        {"title": "补充负责人", "body": "从群聊中确认行动项负责人、截止时间和验收标准。"},
+        {"title": "发布文档", "body": "生成飞书文档后在群内回复链接，收集修改意见。"},
+    ]
+
+
+def _truncate(text: str, limit: int) -> str:
+    value = str(text or "").strip()
+    return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
 def _extract_named_object(data: JsonDict, key: str) -> JsonDict:
@@ -827,7 +1250,30 @@ def _validate_ir(ir: JsonDict) -> list[str]:
         seen.add(block_id)
         if kind not in ALLOWED_BLOCK_KINDS:
             errors.append(f"Unsupported block kind: {kind}.")
+        elif not _block_has_renderable_content(block):
+            errors.append(f"Block {block_id or index} has no renderable content for kind {kind}.")
     return errors
+
+
+def _block_has_renderable_content(block: JsonDict) -> bool:
+    kind = str(block.get("kind") or "").strip()
+    if kind == "cover":
+        return bool(str(block.get("subtitle") or block.get("kicker") or block.get("title") or "").strip())
+    if kind == "split":
+        return bool(_as_list(block.get("points")))
+    if kind == "flow":
+        return bool(_as_list(block.get("nodes")))
+    if kind == "metrics":
+        return bool(_as_list(block.get("items")))
+    if kind == "cards":
+        return bool(_as_list(block.get("cards")))
+    if kind == "table":
+        return bool(_as_list(block.get("columns")) or _as_list(block.get("rows")))
+    if kind == "timeline":
+        return bool(_as_list(block.get("events")))
+    if kind == "image":
+        return bool(str(block.get("caption") or block.get("image") or "").strip())
+    return False
 
 
 def _validate_content_ir(content_ir: JsonDict) -> list[str]:

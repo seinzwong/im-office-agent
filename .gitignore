@@ -22,3 +22,5 @@ htmlcov/
 tests/
 !tests/
 !tests/**/*.py
+natapp.exe
+run_natapp.bat

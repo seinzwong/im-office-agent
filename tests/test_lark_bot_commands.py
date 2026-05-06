@@ -14,6 +14,7 @@ from services.gateway.app import oauth_tokens
 from services.gateway.app.pipelines import summary_from_event
 from services.gateway.app.routes import lark_events
 from services.gateway.app.routes import api_v1
+from services.gateway.adapter.feishu_doc_adapter import FeishuDocClient
 
 
 def _client() -> TestClient:
@@ -115,6 +116,7 @@ class OAuthTokenTests(unittest.TestCase):
         location = response.headers["location"]
         self.assertIn("scope=", location)
         self.assertIn("offline_access", location)
+        self.assertIn("docx%3Adocument%3Areadonly", location)
         self.assertIn("docx%3Adocument%3Acreate", location)
         self.assertIn("state=", location)
 
@@ -181,13 +183,62 @@ class SummaryOAuthFlowTests(unittest.TestCase):
             ), patch.object(
                 summary_from_event,
                 "_invoke_summary_ir",
-                return_value={"result": {"ir": _ir()}},
+                return_value={"ok": True, "result": {"ir": _ir()}},
             ), patch.object(summary_from_event, "publish_ir", return_value=_publish_ok()) as publish, patch.object(
                 summary_from_event, "_safe_reply"
             ):
                 result = summary_from_event.run_summary_command("oc", "om", "ou_user", 1_700_000_000)
         self.assertTrue(result["ok"])
         self.assertEqual(publish.call_args.args[1]["user_access_token"], "access-token")
+
+    def test_summary_reauths_when_saved_token_lacks_doc_scope(self) -> None:
+        settings = _settings(".artifacts/test-auth", static_user_token="")
+        publish_error = {
+            "ok": False,
+            "publish_result": {
+                "doc": {
+                    "ok": False,
+                    "error": {
+                        "code": "FEISHU_DOC_API_FAILED",
+                        "message": "Feishu HTTP 400: {'code': 99991679, 'msg': 'required docx:document:readonly'}",
+                    },
+                }
+            },
+        }
+        with patch.object(summary_from_event, "get_settings", return_value=settings), patch.object(
+            summary_from_event, "get_valid_user_access_token", return_value="access-token"
+        ), patch.object(
+            summary_from_event, "list_chat_messages", return_value=[{"message_id": "m", "sender": "u", "timestamp": "t", "text": "hi"}]
+        ), patch.object(
+            summary_from_event,
+            "_invoke_summary_ir",
+            return_value={"ok": True, "result": {"ir": _ir()}},
+        ), patch.object(summary_from_event, "publish_ir", return_value=publish_error), patch.object(
+            summary_from_event, "_safe_reply"
+        ) as reply:
+            result = summary_from_event.run_summary_command("oc", "om", "ou_user", 1_700_000_000)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "USER_AUTH_REQUIRED")
+        self.assertIn("/api/v1/auth/login?state=", reply.call_args.args[2])
+
+
+class FeishuDocAdapterTests(unittest.TestCase):
+    def test_page_block_id_falls_back_when_read_scope_missing(self) -> None:
+        client = FeishuDocClient("app", "secret", user_access_token="user-token")
+        response = _FakeResponse(
+            {
+                "code": 99991679,
+                "error": {
+                    "permission_violations": [
+                        {"type": "action_privilege_required", "subject": "docx:document"},
+                        {"type": "action_privilege_required", "subject": "docx:document:readonly"},
+                    ]
+                },
+            },
+            status_code=400,
+        )
+        with patch("services.gateway.adapter.feishu_doc_adapter.httpx.get", return_value=response):
+            self.assertEqual(client.page_block_id("doc_token"), "doc_token")
 
 
 def _settings(tmp: str, static_user_token: str = "") -> Settings:

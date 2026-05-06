@@ -12,7 +12,7 @@ from .registry import resolve_agent_endpoint
 
 class AgentsClient:
     def __init__(self) -> None:
-        self._client = httpx.Client(timeout=120.0)
+        self._client = httpx.Client(timeout=120.0, trust_env=False)
 
     def invoke(
         self,
@@ -39,7 +39,13 @@ class AgentsClient:
             json=body,
             headers={"Authorization": f"Bearer {token}"},
         )
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body_preview = (r.text or "").strip()[:2000]
+            raise RuntimeError(
+                f"Agent HTTP {r.status_code} for {url}: {body_preview}"
+            ) from exc
         return r.json()
 
     def close(self) -> None:

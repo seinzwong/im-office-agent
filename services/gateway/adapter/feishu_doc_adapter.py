@@ -244,6 +244,8 @@ class FeishuDocClient:
             params={"page_size": 80},
             timeout=30.0,
         )
+        if _is_docx_read_permission_error(response):
+            return document_id
         _raise_for_feishu_error(response)
         data = response.json()
         if data.get("code") not in (None, 0):
@@ -359,3 +361,21 @@ def _raise_for_feishu_error(response: httpx.Response) -> None:
         data = response.text
     if response.status_code >= 400:
         raise RuntimeError(f"Feishu HTTP {response.status_code}: {data}")
+
+
+def _is_docx_read_permission_error(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    try:
+        data = response.json()
+    except Exception:
+        return False
+    if not isinstance(data, dict) or data.get("code") != 99991679:
+        return False
+    violations = ((data.get("error") or {}).get("permission_violations") or [])
+    subjects = {
+        str(item.get("subject") or "")
+        for item in violations
+        if isinstance(item, dict)
+    }
+    return bool({"docx:document", "docx:document:readonly"} & subjects)
