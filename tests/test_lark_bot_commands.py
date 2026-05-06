@@ -28,7 +28,16 @@ from services.gateway.adapter.ir_schema import ensure_ir_defaults, validate_ir
 from services.gateway.adapter.ppt_adapter import publish_ir_to_ppt, slide_draft_to_ppt_draft
 from services.gateway.app import content_ir_store
 from services.gateway import planb_e2e
-from services.agent.agents import repair_board_ir, repair_slide_draft, validate_board_ir, validate_slide_draft
+from services.agent.agents import (
+    IR_SCHEMA_VERSION,
+    PLANB_IR_PROMPT,
+    _ensure_ir_defaults,
+    _validate_ir,
+    repair_board_ir,
+    repair_slide_draft,
+    validate_board_ir,
+    validate_slide_draft,
+)
 
 
 def _client() -> TestClient:
@@ -57,6 +66,8 @@ class LarkBotCommandTests(unittest.TestCase):
         self.assertEqual(lark_events.parse_summary_command("/summary 30"), (30, 200))
         self.assertEqual(lark_events.parse_summary_command("/summary 30 100"), (30, 100))
         self.assertEqual(lark_events.parse_summary_command("/summary 30 999"), (30, 200))
+        self.assertEqual(lark_events.parse_summary_command("/summary all 25"), (None, 25))
+        self.assertEqual(lark_events.parse_summary_command("/summary 0 25"), (None, 25))
 
     def test_challenge_returns_verification_body(self) -> None:
         response = _client().post("/lark/events", json={"challenge": "abc"})
@@ -82,6 +93,14 @@ class LarkBotCommandTests(unittest.TestCase):
         self.assertEqual(summary.call_args.args[4], 30)
         self.assertEqual(summary.call_args.args[5], 100)
 
+    def test_summary_allows_unbounded_time_window(self) -> None:
+        with patch.object(lark_events, "run_summary_command") as summary:
+            response = _client().post("/lark/events", json=_event("/summary all 25"))
+        self.assertEqual(response.status_code, 200)
+        summary.assert_called_once()
+        self.assertIsNone(summary.call_args.args[4])
+        self.assertEqual(summary.call_args.args[5], 25)
+
     def test_plain_non_mentioned_message_is_ignored(self) -> None:
         with patch.object(lark_events, "_reply_later") as reply, patch.object(
             lark_events, "run_summary_command"
@@ -97,6 +116,123 @@ class LarkBotCommandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         reply.assert_called_once()
         self.assertIn("该功能还没开发好", reply.call_args.args[1])
+
+
+class SummaryPromptContractTests(unittest.TestCase):
+    def test_summary_prompt_keeps_schema_safe_plan_mapping(self) -> None:
+        self.assertIn("For summary_from_chat:", PLANB_IR_PROMPT)
+        self.assertIn("faithful meeting notes", PLANB_IR_PROMPT)
+        self.assertIn("Do not output any field outside the schema", PLANB_IR_PROMPT)
+        self.assertIn("fields named plan, schedule, rules, constraints, participants", PLANB_IR_PROMPT)
+        self.assertIn("Map action items to kind=table intent=actions", PLANB_IR_PROMPT)
+        self.assertIn("Map explicit schedules", PLANB_IR_PROMPT)
+        self.assertIn("Generate a risks block only when the chat explicitly discusses risks", PLANB_IR_PROMPT)
+        self.assertIn("prefer exact message ids", PLANB_IR_PROMPT)
+        self.assertIn("message:<message_id>", PLANB_IR_PROMPT)
+
+    def test_plan_like_summary_ir_uses_existing_schema_fields(self) -> None:
+        raw_ir = {
+            "schemaVersion": IR_SCHEMA_VERSION,
+            "docId": "moyu_plan_ir",
+            "meta": {"title": "Moyu Plan 1.0", "file_name": "Moyu Plan 1.0"},
+            "blocks": [
+                {
+                    "id": "topic",
+                    "kind": "split",
+                    "title": "Discussion Topic",
+                    "intent": "summary",
+                    "points": ["The chat discusses Moyu Plan 1.0 and its operating rules."],
+                    "sourceRefs": ["m1"],
+                },
+                {
+                    "id": "rules",
+                    "kind": "table",
+                    "title": "Plan Rules",
+                    "intent": "comparison",
+                    "columns": ["Rule", "Content", "Condition", "Source"],
+                    "rows": [["Levels", "Level 1 and Level 2 only", "Level 3 not used", "m8"]],
+                    "sourceRefs": ["m8"],
+                },
+                {
+                    "id": "actions",
+                    "kind": "table",
+                    "title": "Action Items",
+                    "intent": "actions",
+                    "columns": ["Item", "Owner", "Time", "Status", "Acceptance"],
+                    "rows": [["API integration", "Wang", "today", "open", "pending confirmation"]],
+                    "sourceRefs": ["m10"],
+                },
+                {
+                    "id": "schedule",
+                    "kind": "timeline",
+                    "title": "Time Windows",
+                    "intent": "summary",
+                    "events": [
+                        {
+                            "date": "10:20-10:40",
+                            "title": "Suitable slot",
+                            "body": "A morning window was proposed.",
+                            "owner": "pending confirmation",
+                            "status": "proposed",
+                        }
+                    ],
+                    "sourceRefs": ["m5"],
+                },
+            ],
+        }
+        normalized = _ensure_ir_defaults(raw_ir, {"task": {"task_id": "summary"}, "messages": []})
+
+        self.assertEqual(_validate_ir(normalized), [])
+        self.assertNotIn("plan", normalized["blocks"][0])
+        self.assertNotIn("rules", normalized["blocks"][1])
+        self.assertNotIn("schedule", normalized["blocks"][3])
+
+    def test_gateway_summary_task_is_meeting_notes_not_generic_proposal(self) -> None:
+        captured: dict = {}
+
+        class FakeAgentsClient:
+            def invoke(self, action, payload, trace_id=None):
+                captured["action"] = action
+                captured["payload"] = payload
+                captured["trace_id"] = trace_id
+                return {"ok": True}
+
+        with patch.object(summary_from_event, "AgentsClient", return_value=FakeAgentsClient()):
+            summary_from_event._invoke_summary_ir(
+                "oc_chat",
+                [{"message_id": "m1", "sender": "u", "timestamp": "t", "text": "Moyu Plan 1.0"}],
+                1,
+                2,
+                60,
+                "om_msg",
+            )
+
+        task = captured["payload"]["task"]
+        self.assertEqual(captured["action"], "summary_from_chat")
+        self.assertEqual(task["title"], "群聊纪要与计划摘要")
+        self.assertIn("忠实纪要", task["goal"])
+        self.assertIn("不要扩写为通用业务方案", task["goal"])
+
+    def test_unbounded_summary_uses_recent_messages_not_oldest_history(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        def fake_list_messages(_settings, _chat_id, start_unix, end_unix, limit):
+            calls.append((start_unix, limit))
+            if start_unix == 9_400:
+                return [
+                    {"message_id": "m1", "timestamp": "2026-05-07T00:01:00+00:00", "text": "recent 1"},
+                    {"message_id": "m2", "timestamp": "2026-05-07T00:02:00+00:00", "text": "recent 2"},
+                    {"message_id": "m3", "timestamp": "2026-05-07T00:03:00+00:00", "text": "recent 3"},
+                    {"message_id": "m4", "timestamp": "2026-05-07T00:04:00+00:00", "text": "recent 4"},
+                ]
+            return []
+
+        with patch.object(summary_from_event, "list_chat_messages", side_effect=fake_list_messages):
+            messages = summary_from_event._list_summary_messages(object(), "oc", 0, 10_000, None, 3)
+
+        self.assertEqual([message["message_id"] for message in messages], ["m2", "m3", "m4"])
+        self.assertEqual(calls[0], (9_400, 200))
+        self.assertNotIn((0, 30), calls)
 
 
 class FeishuMessageParsingTests(unittest.TestCase):
@@ -204,6 +340,10 @@ class SummaryOAuthFlowTests(unittest.TestCase):
                 result = summary_from_event.run_summary_command("oc", "om", "ou_user", 1_700_000_000)
         self.assertTrue(result["ok"])
         self.assertEqual(publish.call_args.args[1]["user_access_token"], "access-token")
+        doc_options = publish.call_args.args[2]["doc"]
+        self.assertEqual(doc_options["table_mode"], "native")
+        self.assertEqual(doc_options["source_display"], "excerpts")
+        self.assertEqual(doc_options["source_messages"][0]["message_id"], "m")
 
     def test_summary_reauths_when_saved_token_lacks_doc_scope(self) -> None:
         settings = _settings(".artifacts/test-auth", static_user_token="")
@@ -390,6 +530,173 @@ class FeishuDocAdapterTests(unittest.TestCase):
 
         self.assertEqual(result["results"][0]["ok"], True)
         self.assertIn("| Task | Owner |", posts[-1]["json"]["children"][0]["code"]["elements"][0]["text_run"]["content"])
+
+    def test_markdown_table_mode_does_not_emit_native_table_children(self) -> None:
+        blocks = [
+            {
+                "type": "table",
+                "rows": [["Task", "Owner"], ["Review", "Alice"]],
+            }
+        ]
+
+        children = feishu_doc_blocks_to_openapi_children(blocks, table_mode="markdown")
+
+        self.assertEqual(children[0]["block_type"], 2)
+        self.assertNotIn("_table_rows", children[0])
+        self.assertIn("| Task | Owner |", children[0]["text"]["elements"][0]["text_run"]["content"])
+
+    def test_native_table_mode_emits_native_table_children(self) -> None:
+        blocks = [
+            {
+                "type": "table",
+                "rows": [["Task", "Owner"], ["Review", "Alice"]],
+            }
+        ]
+
+        children = feishu_doc_blocks_to_openapi_children(blocks, table_mode="native")
+
+        self.assertEqual(children[0]["block_type"], 31)
+        self.assertIn("_table_rows", children[0])
+        self.assertEqual(children[0]["table"]["property"]["row_size"], 2)
+
+    def test_native_table_mode_splits_large_tables_to_fit_feishu_limits(self) -> None:
+        rows = [["Task", "Owner"], *[[f"Task {index}", "Alice"] for index in range(1, 10)]]
+        children = feishu_doc_blocks_to_openapi_children([{"type": "table", "rows": rows}], table_mode="native")
+
+        self.assertEqual(len(children), 2)
+        self.assertTrue(all(child["block_type"] == 31 for child in children))
+        self.assertLessEqual(children[0]["table"]["property"]["row_size"], 9)
+        self.assertLessEqual(children[1]["table"]["property"]["row_size"], 9)
+        self.assertEqual(children[1]["_table_rows"][0], ["Task", "Owner"])
+
+    def test_native_table_create_populates_cells_without_code_fallback(self) -> None:
+        client = FeishuDocClient("app", "secret", user_access_token="user-token")
+        table_child = {
+            "block_type": 31,
+            "table": {"property": {"row_size": 2, "column_size": 2}},
+            "_table_rows": [["Task", "Owner"], ["Review", "Alice"]],
+        }
+        posts = []
+
+        def fake_post(url: str, **kwargs):
+            posts.append({"url": url, "json": kwargs.get("json")})
+            if url.endswith("/children") and kwargs.get("json", {}).get("children", [{}])[0].get("block_type") == 31:
+                return _FakeResponse(
+                    {
+                        "code": 0,
+                        "data": {
+                            "children": [
+                                {
+                                    "block_type": 31,
+                                    "table": {"cells": [["cell_0_0", "cell_0_1"], ["cell_1_0", "cell_1_1"]]},
+                                }
+                            ]
+                        },
+                    }
+                )
+            return _FakeResponse({"code": 0, "data": {"ok": True}})
+
+        with patch.object(client, "page_block_id", return_value="page"), patch(
+            "services.gateway.adapter.feishu_doc_adapter.time.sleep"
+        ), patch(
+            "services.gateway.adapter.feishu_doc_adapter.httpx.post",
+            side_effect=fake_post,
+        ):
+            result = client.create_blocks("doc", [table_child])
+
+        descendant_posts = [post for post in posts if post["url"].endswith("/descendant")]
+        code_fallback_posts = [
+            post
+            for post in posts
+            if any(child.get("block_type") == 14 for child in (post["json"] or {}).get("children", []))
+        ]
+        cell_text_posts = [
+            post
+            for post in posts
+            if "/blocks/cell_" in post["url"] and (post["json"] or {}).get("children", [{}])[0].get("block_type") == 2
+        ]
+        self.assertEqual(result["results"][0]["children"][0]["block_type"], 31)
+        self.assertEqual(len(descendant_posts), 0)
+        self.assertEqual(len(code_fallback_posts), 0)
+        self.assertEqual(len(cell_text_posts), 4)
+
+    def test_source_refs_render_chat_excerpt_when_messages_are_available(self) -> None:
+        ir = {
+            "schemaVersion": "0.2.0",
+            "docId": "summary",
+            "meta": {"title": "Summary", "file_name": "Summary"},
+            "blocks": [
+                {
+                    "id": "rules",
+                    "kind": "split",
+                    "title": "Rules",
+                    "intent": "summary",
+                    "description": "",
+                    "points": ["Keep delivery on time."],
+                    "sourceRefs": ["message:om_1", "om_2", "message:missing"],
+                }
+            ],
+        }
+        messages = [
+            {
+                "message_id": "om_1",
+                "sender": "alice",
+                "timestamp": "2026-05-06T13:06:00+00:00",
+                "text": "先说原则，别影响交付。",
+            },
+            {
+                "message_id": "om_2",
+                "sender": "bob",
+                "timestamp": "2026-05-06T13:07:00+00:00",
+                "text": "不坑同组同事。",
+            },
+        ]
+
+        blocks = ir_to_feishu_doc_blocks(ir, {"source_display": "excerpts", "source_messages": messages})
+        source_block = blocks[-1]
+
+        self.assertEqual(source_block["type"], "quote")
+        self.assertIn("alice 2026-05-06 21:06：先说原则，别影响交付。", source_block["text"])
+        self.assertIn("bob 2026-05-06 21:07：不坑同组同事。", source_block["text"])
+        self.assertNotIn("missing", source_block["text"])
+
+    def test_native_table_fallback_degrades_remaining_tables_to_simple_batch(self) -> None:
+        client = FeishuDocClient("app", "secret", user_access_token="user-token")
+        table_one = {
+            "block_type": 31,
+            "table": {"property": {"row_size": 2, "column_size": 2}},
+            "_table_rows": [["Task", "Owner"], ["Review", "Alice"]],
+        }
+        table_two = {
+            "block_type": 31,
+            "table": {"property": {"row_size": 2, "column_size": 2}},
+            "_table_rows": [["Task", "Owner"], ["Ship", "Bob"]],
+        }
+        posts = []
+
+        def fake_post(url: str, **kwargs):
+            posts.append({"url": url, "json": kwargs.get("json")})
+            if url.endswith("/descendant"):
+                return _FakeResponse({"code": 1, "msg": "unsupported"}, status_code=400)
+            return _FakeResponse({"code": 0, "data": {"ok": True}})
+
+        with patch.object(client, "page_block_id", return_value="page"), patch(
+            "services.gateway.adapter.feishu_doc_adapter.httpx.post",
+            side_effect=fake_post,
+        ):
+            result = client.create_blocks("doc", [table_one, table_two])
+
+        descendant_posts = [post for post in posts if post["url"].endswith("/descendant")]
+        children_posts = [post for post in posts if post["url"].endswith("/children")]
+        fallback_posts = [
+            post
+            for post in children_posts
+            if any("| Task | Owner |" in (((child.get("text") or {}).get("elements") or [{}])[0].get("text_run") or {}).get("content", "") for child in (post["json"] or {}).get("children", []))
+        ]
+        self.assertLessEqual(len(descendant_posts), 1)
+        self.assertEqual(len(fallback_posts), 1)
+        self.assertTrue(all(child.get("block_type") != 14 for child in fallback_posts[0]["json"]["children"]))
+        self.assertEqual(len(result["results"]), 1)
 
 
 class PptSchemaAndAdapterTests(unittest.TestCase):

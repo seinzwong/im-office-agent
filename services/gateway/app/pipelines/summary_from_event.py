@@ -21,6 +21,17 @@ from ..oauth_tokens import build_oauth_login_url, get_valid_user_access_token
 
 log = logging.getLogger(__name__)
 CN_TZ = timezone(timedelta(hours=8))
+RECENT_SUMMARY_LOOKBACK_SECONDS = (
+    10 * 60,
+    30 * 60,
+    60 * 60,
+    6 * 60 * 60,
+    24 * 60 * 60,
+    7 * 24 * 60 * 60,
+    30 * 24 * 60 * 60,
+    365 * 24 * 60 * 60,
+)
+RECENT_SUMMARY_FETCH_LIMIT = 200
 
 
 def run_summary_command(
@@ -28,12 +39,12 @@ def run_summary_command(
     source_message_id: str,
     trigger_user_id: str,
     end_unix: int,
-    minutes: int = 60,
+    minutes: int | None = 60,
     limit: int = 200,
 ) -> Optional[dict[str, Any]]:
     """Fetch scoped chat history, ask Agent for IR, publish doc, then reply."""
     s = get_settings()
-    start_unix = int(end_unix) - max(1, int(minutes or 60)) * 60
+    start_unix = 0 if minutes is None else int(end_unix) - max(1, int(minutes or 60)) * 60
     limit = max(1, min(int(limit or 200), 200))
     user_access_token = get_valid_user_access_token(s, trigger_user_id)
     if not user_access_token:
@@ -46,7 +57,7 @@ def run_summary_command(
         )
         return {"ok": False, "error": {"code": "USER_AUTH_REQUIRED", "message": "User OAuth required."}}
     try:
-        messages = list_chat_messages(s, chat_id, start_unix, end_unix, limit)
+        messages = _list_summary_messages(s, chat_id, start_unix, end_unix, minutes, limit)
     except Exception as exc:  # noqa: BLE001
         log.exception("list chat messages failed: %s", exc)
         _safe_reply(
@@ -57,7 +68,7 @@ def run_summary_command(
         return {"ok": False, "error": {"code": "MESSAGE_LIST_FAILED", "message": str(exc)}}
 
     try:
-        agent_result = _invoke_summary_ir(chat_id, messages, start_unix, end_unix, source_message_id)
+        agent_result = _invoke_summary_ir(chat_id, messages, start_unix, end_unix, minutes, source_message_id)
         if not isinstance(agent_result, dict) or agent_result.get("ok") is not True:
             raise RuntimeError(_agent_error_message(agent_result))
         ir = (agent_result.get("result") or {}).get("ir") if isinstance(agent_result, dict) else None
@@ -79,7 +90,15 @@ def run_summary_command(
                 "folder_token": s.artifacts_drive_folder_token,
                 "user_access_token": user_access_token,
             },
-            {"target_outputs": ["doc"], "dry_run": bool(s.dev_skip_lark)},
+            {
+                "target_outputs": ["doc"],
+                "dry_run": bool(s.dev_skip_lark),
+                "doc": {
+                    "table_mode": "native",
+                    "source_display": "excerpts",
+                    "source_messages": messages,
+                },
+            },
         )
         doc_result = (publish_result.get("publish_result") or {}).get("doc") or {}
         if publish_result.get("ok") is not True or doc_result.get("ok") is not True:
@@ -157,7 +176,9 @@ def _save_summary_content_ir(document_id: str, open_url: str, messages: list[dic
         "task": {
             "task_id": f"summary_{chat_id}",
             "title": f"Chat summary {chat_id}",
-            "goal": f"Summarize the selected chat window ({minutes or 60} minutes).",
+            "goal": "Summarize the selected chat window."
+            if minutes is None
+            else f"Summarize the selected chat window ({minutes} minutes).",
             "audience": "Management and business team",
             "deliverables": ["doc"],
         },
@@ -173,11 +194,53 @@ def _save_summary_content_ir(document_id: str, open_url: str, messages: list[dic
         log.warning("content_ir sidecar save failed: %s", exc)
 
 
+def _list_summary_messages(
+    settings,
+    chat_id: str,
+    start_unix: int,
+    end_unix: int,
+    minutes: int | None,
+    limit: int,
+) -> list[dict[str, str]]:
+    if minutes is not None:
+        return list_chat_messages(settings, chat_id, start_unix, end_unix, limit)
+    return _list_recent_chat_messages(settings, chat_id, end_unix, limit)
+
+
+def _list_recent_chat_messages(settings, chat_id: str, end_unix: int, limit: int) -> list[dict[str, str]]:
+    target = max(1, min(int(limit or 200), 200))
+    by_id: dict[str, dict[str, str]] = {}
+    for window_seconds in RECENT_SUMMARY_LOOKBACK_SECONDS:
+        window_start = max(0, int(end_unix) - window_seconds)
+        batch = list_chat_messages(
+            settings,
+            chat_id,
+            window_start,
+            end_unix,
+            max(target, RECENT_SUMMARY_FETCH_LIMIT),
+        )
+        for message in batch:
+            message_id = str(message.get("message_id") or "")
+            by_id[message_id or f"message_{len(by_id) + 1}"] = message
+        ordered = _sort_messages_chronologically(by_id.values())
+        if len(ordered) >= target:
+            return ordered[-target:]
+    return _sort_messages_chronologically(by_id.values())[-target:]
+
+
+def _sort_messages_chronologically(messages) -> list[dict[str, str]]:
+    return sorted(
+        [message for message in messages if isinstance(message, dict)],
+        key=lambda item: item.get("timestamp") or "",
+    )
+
+
 def _invoke_summary_ir(
     chat_id: str,
     messages: list[dict[str, str]],
     start_unix: int,
     end_unix: int,
+    minutes: int | None,
     source_message_id: str,
 ) -> dict[str, Any]:
     ag = AgentsClient()
@@ -188,13 +251,13 @@ def _invoke_summary_ir(
             "time_window": {
                 "start_unix": start_unix,
                 "end_unix": end_unix,
-                "label": f"{_format_time(start_unix)} 至 {_format_time(end_unix)}",
+                "label": _time_window_label(start_unix, end_unix, minutes),
             },
             "task": {
                 "task_id": f"summary_{source_message_id or int(end_unix)}",
-                "title": "群聊目标与方案总结",
-                "goal": "整理群聊中的主要目标以及产出的方案，提炼共识、问题、行动路径、风险与下一步。",
-                "audience": "群聊成员",
+                "title": "\u7fa4\u804a\u7eaa\u8981\u4e0e\u8ba1\u5212\u6458\u8981",
+                "goal": "\u6839\u636e\u7fa4\u804a\u6d88\u606f\u751f\u6210\u5fe0\u5b9e\u7eaa\u8981\uff0c\u63d0\u53d6\u660e\u786e\u7684\u8ba1\u5212\u3001\u89c4\u5219\u3001\u5f85\u529e\u3001\u65f6\u95f4\u5b89\u6392\u548c\u672a\u51b3\u4e8b\u9879\uff1b\u4e0d\u8981\u6269\u5199\u4e3a\u901a\u7528\u4e1a\u52a1\u65b9\u6848\u3002",
+                "audience": "\u7fa4\u804a\u6210\u5458",
                 "deliverables": ["doc"],
             },
             "messages": messages,
@@ -246,7 +309,7 @@ def _summary_done_text(
     start_unix: int,
     end_unix: int,
     message_count: int,
-    minutes: int,
+    minutes: int | None,
     limit: int,
     open_url: str,
 ) -> str:
@@ -254,8 +317,8 @@ def _summary_done_text(
     link = f"\n文档已生成：{open_url}" if open_url else ""
     return (
         f"{prefix}"
-        f"已收到 /summary。本次纳入统计的聊天时间：自 {_format_time(start_unix)} 至 {_format_time(end_unix)}，"
-        f"共 {message_count} 条消息。（时间窗：最近 {minutes} 分钟；单次最多拉取 {limit} 条。）"
+        f"已收到 `/summary`。本次纳入统计的聊天时间：{_time_window_label(start_unix, end_unix, minutes)}。"
+        f"共 {message_count} 条消息。（时间窗：{_summary_window_text(minutes)}；单次最多拉取 {limit} 条。）"
         f"{link}"
     )
 
@@ -276,6 +339,18 @@ def _auth_required_text(user_id: str, auth_url: str) -> str:
 
 def _format_time(unix_seconds: int) -> str:
     return datetime.fromtimestamp(int(unix_seconds), CN_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+def _time_window_label(start_unix: int, end_unix: int, minutes: int | None) -> str:
+    if minutes is None:
+        return f"不限开始时间 至 {_format_time(end_unix)}"
+    return f"{_format_time(start_unix)} 至 {_format_time(end_unix)}"
+
+
+def _summary_window_text(minutes: int | None) -> str:
+    if minutes is None:
+        return "无时间限制"
+    return f"最近 {minutes} 分钟"
 
 
 def run_summary_for_chat(

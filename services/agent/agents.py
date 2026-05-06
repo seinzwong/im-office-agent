@@ -28,9 +28,10 @@ PLANB_IR_PROMPT = """You are the only Agent in PlanB.
 
 Use all scope messages in the input to write one complete platform-neutral
 industrial Artifact IR. Return JSON only.
-For summary_from_chat tasks, focus on the chat's main goals and the proposed
-deliverable solution: clarify objectives, decisions, blockers, action plan,
-owners when available, risks, and expected outcomes.
+For summary_from_chat tasks, treat the task as faithful meeting notes unless
+the messages explicitly ask for a business proposal. Summarize only facts that
+appear in messages, and do not turn casual chat into a generic objectives /
+solution / risk template.
 
 Rules:
 - Do not produce topic summaries, task summaries, JSON Patch, Feishu OpenAPI
@@ -61,6 +62,31 @@ Rules:
 - Do not create empty content blocks: split.points, flow.nodes, metrics.items,
   cards.cards, table.rows, timeline.events, or image.caption/image must contain
   useful content when that kind is used.
+
+For summary_from_chat:
+- Use only message-grounded facts. Do not include system implementation details
+  such as OAuth, permissions, Agent, OpenAPI, document creation failures, or
+  bot/runtime status unless the chat messages explicitly mention them.
+- For plan-like chat, extract plan name, purpose, rules, levels, time windows,
+  action items, owners, blockers, and open questions only when present in
+  messages. If owner, date, status, or acceptance criteria is missing, write
+  "待确认"; do not invent it.
+- Map discussion/background to kind=split intent=summary with factual points.
+  Map rules, levels, limits, or comparisons to kind=table with columns such as
+  规则项, 内容, 适用条件, 来源. Map action items to kind=table intent=actions
+  with columns such as 事项, 负责人, 时间, 状态, 验收标准. Map explicit schedules
+  or time windows to kind=timeline intent=summary.
+- Generate a risks block only when the chat explicitly discusses risks. Avoid
+  generic risks such as missing permissions or failed document creation unless
+  those words appear in messages.
+- Do not output any field outside the schema. In particular, do not create
+  fields named plan, schedule, rules, constraints, participants, or sources
+  outside sourceRefs.
+- Prefer source-grounded wording. Each non-cover block should include sourceRefs
+  when possible, using speaker names, message ids, or times from the input.
+- For sourceRefs in summary_from_chat, prefer exact message ids from the input
+  such as message:<message_id>. Do not use generic refs like "消息" when a
+  message id is available.
 """
 
 CONTENT_IR_PROMPT = """You are the Content Agent in PlanB.

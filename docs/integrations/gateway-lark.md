@@ -38,7 +38,7 @@
 - 当前支持命令：
   - 只 `@` 机器人且无正文：回复开场白并 @ 触发用户。
   - `/help`：展示可用命令。
-  - `/summary [minutes] [limit]`：拉取最近一段群聊并生成飞书文档；默认 `60` 分钟、最多 `200` 条，`limit` 上限为 `200`。
+  - `/summary [minutes|all] [limit]`：拉取最近一段群聊并生成飞书文档；默认 `60` 分钟、最多 `200` 条，`limit` 上限为 `200`；传 `all` 可关闭时间窗限制。
   - 其他 `/` 指令：回复“该功能还没开发好，请检查已有指令”。
 - `/summary` 流程：拉取群消息历史 -> 调用 Agent 生成 IR -> 用 IR 渲染并创建 docx -> 回复原消息，回复中包含统计时间窗、消息条数和文档链接。
 - OAuth token 默认保存在 `.artifacts/auth/user_tokens.json`；可通过 `oauth_token_store_path` 覆盖。默认用户 scope 包含 `offline_access`、`docx:document:create`、`docx:document:write_only`、`drive:file:upload`、`space:document:retrieve` 和 `contact:user.base:readonly`。

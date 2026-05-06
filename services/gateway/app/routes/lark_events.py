@@ -17,6 +17,7 @@ router = APIRouter(prefix="/lark", tags=["lark"])
 DEFAULT_SUMMARY_MINUTES = 60
 DEFAULT_SUMMARY_LIMIT = 200
 MAX_SUMMARY_LIMIT = 200
+UNBOUNDED_SUMMARY_TOKENS = {"all", "0", "*", "unlimited", "none"}
 
 
 def _parse_content(content: Any) -> dict[str, Any]:
@@ -51,15 +52,22 @@ def _strip_leading_mention(text: str) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-def parse_summary_command(text: str) -> tuple[int, int]:
+def parse_summary_command(text: str) -> tuple[int | None, int]:
     parts = text.strip().split()
-    minutes = DEFAULT_SUMMARY_MINUTES
+    minutes: int | None = DEFAULT_SUMMARY_MINUTES
     limit = DEFAULT_SUMMARY_LIMIT
     if len(parts) >= 2:
-        minutes = _positive_int(parts[1], DEFAULT_SUMMARY_MINUTES)
+        minutes = _parse_summary_minutes(parts[1])
     if len(parts) >= 3:
         limit = _positive_int(parts[2], DEFAULT_SUMMARY_LIMIT)
     return minutes, min(limit, MAX_SUMMARY_LIMIT)
+
+
+def _parse_summary_minutes(value: Any) -> int | None:
+    token = str(value or "").strip().lower()
+    if token in UNBOUNDED_SUMMARY_TOKENS:
+        return None
+    return _positive_int(value, DEFAULT_SUMMARY_MINUTES)
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -94,14 +102,13 @@ def _help_text(user_id: str) -> str:
     prefix = f'<at user_id="{user_id}"></at>\n' if user_id else ""
     return (
         f"{prefix}"
-        "可用指令：\n"
-        "• /summary：整理最近 60 分钟群聊，最多 200 条消息\n"
-        "• /summary 30：整理最近 30 分钟群聊\n"
-        "• /summary 30 100：整理最近 30 分钟、最多 100 条消息\n"
-        "• /help：查看可用指令"
+        "Commands:\n"
+        "- /summary: summarize the last 60 minutes, up to 200 messages\n"
+        "- /summary 30: summarize the last 30 minutes\n"
+        "- /summary 30 100: summarize the last 30 minutes, up to 100 messages\n"
+        "- /summary all 25: no time window, fetch up to 25 recent messages\n"
+        "- /help: show available commands"
     )
-
-
 def _unknown_command_text(user_id: str) -> str:
     prefix = f'<at user_id="{user_id}"></at>\n' if user_id else ""
     return f"{prefix}该功能还没开发好，请检查已有指令"

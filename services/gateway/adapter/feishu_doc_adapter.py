@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -10,9 +13,20 @@ from .ir_schema import ensure_ir_defaults, validate_ir
 from .markdown_adapter import ir_to_markdown
 from .runtime import adapter_error, env_value, extract_folder_token, run_lark_cli
 
+log = logging.getLogger(__name__)
 
-def ir_to_feishu_doc_blocks(ir: dict) -> list[dict]:
+DOC_TZ = timezone(timedelta(hours=8))
+SOURCE_EXCERPT_LIMIT = 3
+SOURCE_EXCERPT_TEXT_LIMIT = 120
+TABLE_CELL_WRITE_INTERVAL_SECONDS = 0.35
+NATIVE_TABLE_MAX_ROWS = 9
+NATIVE_TABLE_MAX_COLUMNS = 9
+
+
+def ir_to_feishu_doc_blocks(ir: dict, options: dict | None = None) -> list[dict]:
+    options = options or {}
     ir = ensure_ir_defaults(ir)
+    source_context = _source_context(options)
     meta = ir["meta"]
     blocks: list[dict] = [{"type": "heading", "text": meta["title"], "level": 1}]
     if meta.get("subtitle"):
@@ -23,12 +37,13 @@ def ir_to_feishu_doc_blocks(ir: dict) -> list[dict]:
     blocks.append({"type": "divider"})
     for block in ir.get("blocks", []):
         if isinstance(block, dict):
-            blocks.extend(_block_to_doc_blocks(block))
+            blocks.extend(_block_to_doc_blocks(block, source_context))
     return blocks
 
 
-def feishu_doc_blocks_to_openapi_children(blocks: list[dict]) -> list[dict]:
+def feishu_doc_blocks_to_openapi_children(blocks: list[dict], table_mode: str = "native") -> list[dict]:
     children = []
+    use_markdown_tables = str(table_mode or "native").strip().lower() == "markdown"
     for block in blocks:
         block_type = block.get("type")
         text = str(block.get("text") or "")
@@ -45,14 +60,10 @@ def feishu_doc_blocks_to_openapi_children(blocks: list[dict]) -> list[dict]:
             children.append({"block_type": 14, "code": {"elements": [_text_element(text)]}})
         elif block_type == "table":
             rows = _normalize_table_rows(block.get("rows", []))
-            if rows:
-                children.append(
-                    {
-                        "block_type": 31,
-                        "table": {"property": {"row_size": len(rows), "column_size": _table_width(rows), "header_row": True}},
-                        "_table_rows": rows,
-                    }
-                )
+            if rows and use_markdown_tables:
+                children.extend(_readable_table_blocks(rows))
+            elif rows:
+                children.extend(_native_table_children(rows))
             elif block.get("caption"):
                 children.append(_text_block(2, "text", str(block.get("caption") or "")))
         elif block_type == "divider":
@@ -76,8 +87,9 @@ def publish_ir_to_feishu_doc(ir: dict, options: dict) -> dict:
     if mode == "replace":
         return adapter_error("UNSUPPORTED_OPERATION", "Doc replace is not supported in v1.", [], warnings)
 
-    draft_blocks = ir_to_feishu_doc_blocks(normalized)
-    children = feishu_doc_blocks_to_openapi_children(draft_blocks)
+    draft_blocks = ir_to_feishu_doc_blocks(normalized, options)
+    table_mode = str(options.get("table_mode") or "native").strip().lower()
+    children = feishu_doc_blocks_to_openapi_children(draft_blocks, table_mode)
     if options.get("dry_run", True):
         return {
             "ok": True,
@@ -236,22 +248,30 @@ class FeishuDocClient:
         parent_id = self.page_block_id(document_id)
         results: list[dict] = []
         simple_batch: list[dict] = []
+        native_table_failed = False
 
         def flush_simple() -> None:
             if not simple_batch:
                 return
-            results.append(self._create_child_blocks(document_id, parent_id, simple_batch))
+            results.append(self._create_child_blocks(document_id, parent_id, [*simple_batch]))
             simple_batch.clear()
 
         for child in children:
             if _is_internal_table_child(child):
-                flush_simple()
-                try:
-                    results.append(self._create_table_descendants(document_id, parent_id, child))
-                except Exception:
+                if native_table_failed:
                     fallback = _table_fallback_children(child)
                     if fallback:
-                        results.append(self._create_child_blocks(document_id, parent_id, fallback))
+                        simple_batch.extend(fallback)
+                    continue
+                flush_simple()
+                try:
+                    results.append(self._create_native_table(document_id, parent_id, child))
+                except Exception as exc:
+                    log.warning("native Feishu table failed; falling back to readable text table: %s", exc)
+                    native_table_failed = True
+                    fallback = _table_fallback_children(child)
+                    if fallback:
+                        simple_batch.extend(fallback)
             else:
                 simple_batch.append(_strip_internal_keys(child))
         flush_simple()
@@ -283,6 +303,24 @@ class FeishuDocClient:
         if data.get("code") not in (None, 0):
             raise RuntimeError(str(data))
         return data.get("data") or {}
+
+    def _create_native_table(self, document_id: str, parent_id: str, table_child: dict) -> dict:
+        rows = _normalize_table_rows(table_child.get("_table_rows"))
+        if not rows:
+            return {}
+        empty_table = _strip_internal_keys(table_child)
+        created = self._create_child_blocks(document_id, parent_id, [empty_table])
+        cells = _extract_table_cell_ids(created, len(rows), _table_width(rows))
+        if not cells:
+            return self._create_table_descendants(document_id, parent_id, table_child)
+        for row_index, row in enumerate(rows):
+            for column_index, text in enumerate(row):
+                cell_id = cells[row_index][column_index] if row_index < len(cells) and column_index < len(cells[row_index]) else ""
+                if not cell_id:
+                    continue
+                time.sleep(TABLE_CELL_WRITE_INTERVAL_SECONDS)
+                self._create_child_blocks(document_id, cell_id, [_text_block(2, "text", text)])
+        return created
 
     def page_block_id(self, document_id: str) -> str:
         response = httpx.get(
@@ -324,7 +362,7 @@ def _artifact_file_name(ir: dict) -> str:
     return str(meta.get("file_name") or meta.get("title") or "Generated Artifact").strip() or "Generated Artifact"
 
 
-def _block_to_doc_blocks(block: dict) -> list[dict]:
+def _block_to_doc_blocks(block: dict, source_context: dict | None = None) -> list[dict]:
     kind = block.get("kind")
     title = str(block.get("title") or "")
     out: list[dict] = [{"type": "heading", "text": title, "level": 2, "source_refs": {"block_id": block.get("id")}}]
@@ -356,7 +394,7 @@ def _block_to_doc_blocks(block: dict) -> list[dict]:
         out.extend({"type": "bullet", "text": _timeline_event_text(event)} for event in block.get("events", []) if isinstance(event, dict))
     elif kind == "image":
         out.append({"type": "paragraph", "text": f"[Image] {block.get('caption') or block.get('image') or ''}"})
-    out.extend(_source_ref_blocks(block.get("sourceRefs")))
+    out.extend(_source_ref_blocks(block.get("sourceRefs"), source_context))
     return out
 
 
@@ -377,12 +415,100 @@ def _timeline_event_text(event: dict) -> str:
     return f"{text} ({meta})" if meta else text
 
 
-def _source_ref_blocks(value: Any) -> list[dict]:
-    refs = [_display_source_ref(item) for item in value] if isinstance(value, list) else []
+def _source_ref_blocks(value: Any, source_context: dict | None = None) -> list[dict]:
+    refs = _source_ref_excerpts(value, source_context) if isinstance(value, list) else []
+    if not refs:
+        refs = [_display_source_ref(item) for item in value] if isinstance(value, list) else []
     refs = [item for item in refs if item]
     if not refs:
         return []
-    return [{"type": "quote", "text": "来源：" + " | ".join(refs)}]
+    separator = "\n" if source_context and source_context.get("display") == "excerpts" else " | "
+    return [{"type": "quote", "text": "来源：" + separator + separator.join(refs)}]
+
+
+def _source_context(options: dict) -> dict:
+    display = str(options.get("source_display") or "").strip().lower()
+    raw_messages = options.get("source_messages")
+    if display != "excerpts" or not isinstance(raw_messages, list):
+        return {"display": display, "messages": {}}
+    messages: dict[str, dict] = {}
+    for message in raw_messages:
+        if not isinstance(message, dict):
+            continue
+        message_id = str(message.get("message_id") or "").strip()
+        if message_id:
+            messages[message_id] = message
+            messages[f"message:{message_id}"] = message
+    return {"display": display, "messages": messages}
+
+
+def _source_ref_excerpts(value: Any, source_context: dict | None) -> list[str]:
+    if not source_context or source_context.get("display") != "excerpts":
+        return []
+    messages = source_context.get("messages")
+    if not isinstance(messages, dict) or not messages:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value if isinstance(value, list) else []:
+        key = _source_ref_message_key(item)
+        message = messages.get(key) or messages.get(f"message:{key}")
+        if not isinstance(message, dict):
+            continue
+        message_id = str(message.get("message_id") or key)
+        if message_id in seen:
+            continue
+        seen.add(message_id)
+        excerpt = _message_excerpt(message)
+        if excerpt:
+            out.append(excerpt)
+        if len(out) >= SOURCE_EXCERPT_LIMIT:
+            break
+    return out
+
+
+def _source_ref_message_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower.startswith("message:"):
+        return text.split(":", 1)[1].strip()
+    if "message:" in lower:
+        suffix = text[lower.index("message:") + len("message:") :]
+        return suffix.split()[0].strip(" ,;|")
+    return text
+
+
+def _message_excerpt(message: dict) -> str:
+    sender = str(message.get("sender") or "unknown").strip() or "unknown"
+    timestamp = _display_timestamp(message.get("timestamp"))
+    text = _compact_text(message.get("text"), SOURCE_EXCERPT_TEXT_LIMIT)
+    if not text:
+        return ""
+    prefix = " ".join(item for item in [sender, timestamp] if item)
+    return f"- {prefix}：{text}" if prefix else f"- {text}"
+
+
+def _display_timestamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        normalized = text.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(DOC_TZ).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return text[:16]
+
+
+def _compact_text(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
 
 
 def _display_meta_items(value: Any) -> list[str]:
@@ -503,7 +629,99 @@ def _table_descendant_payload(table_child: dict) -> dict:
 
 def _table_fallback_children(table_child: dict) -> list[dict]:
     rows = _normalize_table_rows(table_child.get("_table_rows"))
-    return [_text_block(14, "code", "\n".join(_markdown_table(rows)))] if rows else []
+    return _readable_table_blocks(rows) if rows else []
+
+
+def _native_table_children(rows: list[list[str]]) -> list[dict]:
+    normalized = _limit_table_columns(rows)
+    if not normalized:
+        return []
+    out: list[dict] = []
+    header = normalized[0]
+    data_rows = normalized[1:]
+    chunk_size = max(1, NATIVE_TABLE_MAX_ROWS - 1)
+    chunks = [data_rows[index : index + chunk_size] for index in range(0, len(data_rows), chunk_size)] or [[]]
+    for chunk in chunks:
+        table_rows = [header, *chunk]
+        out.append(
+            {
+                "block_type": 31,
+                "table": {
+                    "property": {
+                        "row_size": len(table_rows),
+                        "column_size": _table_width(table_rows),
+                        "header_row": True,
+                    }
+                },
+                "_table_rows": table_rows,
+            }
+        )
+    return out
+
+
+def _limit_table_columns(rows: list[list[str]]) -> list[list[str]]:
+    width = min(_table_width(rows), NATIVE_TABLE_MAX_COLUMNS)
+    return [row[:width] for row in rows if isinstance(row, list)]
+
+
+def _readable_table_blocks(rows: list[list[str]]) -> list[dict]:
+    lines = _markdown_table(rows)
+    return [_text_block(2, "text", line) for line in lines]
+
+
+def _extract_table_cell_ids(created: dict, row_size: int, column_size: int) -> list[list[str]]:
+    table_block = _find_created_table_block(created)
+    if not table_block:
+        return []
+    table = table_block.get("table") if isinstance(table_block.get("table"), dict) else {}
+    raw_cells = table.get("cells") or table_block.get("children") or table.get("children")
+    flat = _flatten_cell_ids(raw_cells)
+    expected = max(0, int(row_size or 0)) * max(0, int(column_size or 0))
+    if len(flat) < expected or not expected:
+        return []
+    return [flat[index : index + column_size] for index in range(0, expected, column_size)]
+
+
+def _find_created_table_block(value: Any) -> dict:
+    if isinstance(value, dict):
+        if value.get("block_type") == 31:
+            return value
+        block = value.get("block")
+        if isinstance(block, dict) and block.get("block_type") == 31:
+            return block
+        for key in ("children", "items", "blocks"):
+            item = _find_created_table_block(value.get(key))
+            if item:
+                return item
+        data = value.get("data")
+        if isinstance(data, dict):
+            return _find_created_table_block(data)
+    if isinstance(value, list):
+        for item in value:
+            found = _find_created_table_block(item)
+            if found:
+                return found
+    return {}
+
+
+def _flatten_cell_ids(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, dict):
+        for key in ("block_id", "id", "cell_id"):
+            item = str(value.get(key) or "").strip()
+            if item:
+                return [item]
+        out: list[str] = []
+        for item in value.values():
+            out.extend(_flatten_cell_ids(item))
+        return out
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            out.extend(_flatten_cell_ids(item))
+        return out
+    return []
 
 
 def _markdown_table(rows: list[list[str]]) -> list[str]:
