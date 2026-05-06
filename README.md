@@ -34,7 +34,8 @@ IM Office Agent 是一个面向飞书 IM 场景的办公协同智能助手原型
 
 ## Demo 视频
 
-> 视频占位：后续可在这里放置项目演示视频链接、GitHub 上传视频，或使用封面图跳转到录屏地址。
+https://github.com/user-attachments/assets/4065c594-207d-4716-b28c-bb9f9bb099ef
+
 
 ## 核心能力
 
