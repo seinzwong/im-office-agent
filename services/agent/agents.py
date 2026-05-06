@@ -63,8 +63,10 @@ Rules:
 - Do not invent new business facts beyond the ContentIR.
 - slide_draft must contain title, subtitle, theme, and slides.
 - Each slide must contain id, title, layout, content, and speaker_notes.
-- Supported layouts: cover, section_divider, problem_cards, metric_cards,
-  three_stage_flow, timeline, risk_table, comparison_table, summary_next_steps.
+- Supported layouts: cover, split, flow, metrics, cards, table, timeline,
+  summary. Existing aliases section_divider, problem_cards, metric_cards,
+  three_stage_flow, risk_table, comparison_table, summary_next_steps are also
+  accepted.
 - Every slide content must be non-empty.
 - section_divider may use an empty points array when the slide title itself is
   the section message.
@@ -80,13 +82,26 @@ Rules:
   growth content can use teal/indigo. Avoid leaving the default unchanged when
   the content suggests a better palette.
 - Every theme color must be a 6-digit hex string like "#2563EB".
+- Choose theme.cover_bg as a dark cover background, theme.background as a light
+  normal slide background, theme.surface as card/table background, and
+  theme.accent / theme.accent2 as decorative and emphasis colors.
+- Choose readable font colors: cover_title should be "#FFFFFF",
+  cover_subtitle "#E2E8F0", cover_muted "#CBD5E1"; body_title/body_text should
+  be dark readable colors on theme.background, body_muted a readable muted gray.
+- Do not use dark body_text on dark cover_bg. Do not use white body_text on
+  light normal pages.
+- Do not encode placeholder text such as "click to add body" or "点击可添加正文".
+- You may include slide.asset_key to request an available SVG/bitmap asset and
+  slide.visual for high-level intent only, for example {"tone":"executive",
+  "density":"balanced", "imagePlacement":"right", "highlightIndex":1}. Do not
+  output renderer coordinates, XML, or pptxgenjs option names.
 
 SlideDraft schema:
 {
   "slide_draft": {
     "title": "string",
     "subtitle": "string",
-    "theme": {"accent": "#2563EB", "accent2": "#0F766E", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B", "success": "#16A34A", "warning": "#F97316"},
+    "theme": {"accent": "#2563EB", "accent2": "#0F766E", "background": "#F8FAFC", "surface": "#FFFFFF", "text": "#0F172A", "muted": "#64748B", "success": "#16A34A", "warning": "#F97316", "cover_bg": "#0F172A", "cover_title": "#FFFFFF", "cover_subtitle": "#E2E8F0", "cover_muted": "#CBD5E1", "body_title": "#0F172A", "body_text": "#0F172A", "body_muted": "#64748B"},
     "slides": [
       {"id": "cover", "layout": "cover", "title": "string", "content": {"subtitle": "string", "kicker": "string"}, "speaker_notes": "string"},
       {"id": "section", "layout": "section_divider", "title": "string", "content": {"points": ["string"]}, "speaker_notes": "string"},
@@ -110,6 +125,12 @@ phases, roadmap, cards, bullets, headers, or milestones in SlideDraft.
 
 SLIDE_LAYOUTS = {
     "cover",
+    "split",
+    "flow",
+    "metrics",
+    "cards",
+    "table",
+    "summary",
     "section_divider",
     "problem_cards",
     "metric_cards",
@@ -118,6 +139,15 @@ SLIDE_LAYOUTS = {
     "risk_table",
     "comparison_table",
     "summary_next_steps",
+}
+
+SLIDE_LAYOUT_ALIASES = {
+    "split": "section_divider",
+    "cards": "problem_cards",
+    "metrics": "metric_cards",
+    "flow": "three_stage_flow",
+    "table": "risk_table",
+    "summary": "summary_next_steps",
 }
 
 CONTENT_IR_RESPONSE_SCHEMA = {
@@ -202,270 +232,40 @@ CONTENT_IR_RESPONSE_SCHEMA = {
     },
 }
 
-SLIDE_DRAFT_RESPONSE_SCHEMA = {
-    "name": "planb_slide_draft_response",
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["slide_draft", "warnings"],
-        "properties": {
-            "warnings": {"type": "array", "items": {"type": "string"}},
-            "slide_draft": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["title", "subtitle", "theme", "slides"],
-                "properties": {
-                    "title": {"type": "string"},
-                    "subtitle": {"type": "string"},
-                    "theme": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["accent", "accent2", "background", "surface", "text", "muted", "success", "warning"],
-                        "properties": {
-                            "accent": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "accent2": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "background": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "surface": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "text": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "muted": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "success": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "warning": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                        },
-                    },
-                    "slides": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                            "anyOf": [
-                                {"$ref": "#/$defs/cover_slide"},
-                                {"$ref": "#/$defs/section_slide"},
-                                {"$ref": "#/$defs/problem_slide"},
-                                {"$ref": "#/$defs/metric_slide"},
-                                {"$ref": "#/$defs/flow_slide"},
-                                {"$ref": "#/$defs/timeline_slide"},
-                                {"$ref": "#/$defs/risk_table_slide"},
-                                {"$ref": "#/$defs/comparison_table_slide"},
-                                {"$ref": "#/$defs/summary_slide"},
-                            ]
-                        },
-                    },
-                },
-            },
-        },
-        "$defs": {
-            "base_text": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["id", "title", "speaker_notes"],
-                "properties": {
-                    "id": {"type": "string"},
-                    "title": {"type": "string"},
-                    "speaker_notes": {"type": "string"},
-                },
-            },
-            "card": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["title", "body"],
-                "properties": {"title": {"type": "string"}, "body": {"type": "string"}},
-            },
-            "metric": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["label", "value", "note"],
-                "properties": {
-                    "label": {"type": "string"},
-                    "value": {"type": "string"},
-                    "note": {"type": "string"},
-                },
-            },
-            "event": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["date", "title", "body"],
-                "properties": {
-                    "date": {"type": "string"},
-                    "title": {"type": "string"},
-                    "body": {"type": "string"},
-                },
-            },
-            "cover_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "cover"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["subtitle", "kicker"],
-                                "properties": {"subtitle": {"type": "string"}, "kicker": {"type": "string"}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "section_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "section_divider"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["points"],
-                                "properties": {"points": {"type": "array", "items": {"type": "string"}}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "problem_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "problem_cards"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["problems"],
-                                "properties": {"problems": {"type": "array", "items": {"$ref": "#/$defs/card"}}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "metric_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "metric_cards"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["metrics"],
-                                "properties": {"metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "flow_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "three_stage_flow"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["steps"],
-                                "properties": {"steps": {"type": "array", "items": {"$ref": "#/$defs/card"}}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "timeline_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "timeline"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["events"],
-                                "properties": {"events": {"type": "array", "items": {"$ref": "#/$defs/event"}}},
-                            },
-                        },
-                    },
-                ]
-            },
-            "risk_table_slide": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["id", "title", "layout", "content", "speaker_notes"],
-                "properties": {
-                    "id": {"type": "string"},
-                    "title": {"type": "string"},
-                    "layout": {"const": "risk_table"},
-                    "speaker_notes": {"type": "string"},
-                    "content": {"$ref": "#/$defs/table_content"},
-                },
-            },
-            "comparison_table_slide": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["id", "title", "layout", "content", "speaker_notes"],
-                "properties": {
-                    "id": {"type": "string"},
-                    "title": {"type": "string"},
-                    "layout": {"const": "comparison_table"},
-                    "speaker_notes": {"type": "string"},
-                    "content": {"$ref": "#/$defs/table_content"},
-                },
-            },
-            "table_content": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["columns", "rows"],
-                "properties": {
-                    "columns": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-                },
-            },
-            "summary_slide": {
-                "allOf": [
-                    {"$ref": "#/$defs/base_text"},
-                    {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "required": ["layout", "content"],
-                        "properties": {
-                            "layout": {"const": "summary_next_steps"},
-                            "content": {
-                                "type": "object",
-                                "additionalProperties": False,
-                                "required": ["outcomes", "next_steps"],
-                                "properties": {
-                                    "outcomes": {"type": "array", "items": {"type": "string"}},
-                                    "next_steps": {"type": "array", "items": {"type": "string"}},
-                                },
-                            },
-                        },
-                    },
-                ]
-            },
-        },
-    },
+SLIDE_CONTENT_PROPERTIES = {
+    "subtitle": {"type": "string"},
+    "kicker": {"type": "string"},
+    "points": {"type": "array", "items": {"type": "string"}},
+    "problems": {"type": "array", "items": {"$ref": "#/$defs/card"}},
+    "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
+    "steps": {"type": "array", "items": {"$ref": "#/$defs/card"}},
+    "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+    "columns": {"type": "array", "items": {"type": "string"}},
+    "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+    "outcomes": {"type": "array", "items": {"type": "string"}},
+    "next_steps": {"type": "array", "items": {"type": "string"}},
 }
 
-# OpenAI structured outputs use a constrained JSON Schema subset. Keep the
-# schema flat here instead of using allOf composition so providers do not
-# disagree on additionalProperties semantics. Layout-specific required content
-# is still enforced after generation by _validate_slide_draft.
+
+THEME_COLOR_FIELDS = [
+    "accent",
+    "accent2",
+    "background",
+    "surface",
+    "text",
+    "muted",
+    "success",
+    "warning",
+    "cover_bg",
+    "cover_title",
+    "cover_subtitle",
+    "cover_muted",
+    "body_title",
+    "body_text",
+    "body_muted",
+]
+
+
 SLIDE_DRAFT_RESPONSE_SCHEMA = {
     "name": "planb_slide_draft_response",
     "schema": {
@@ -484,16 +284,10 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
                     "theme": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["accent", "accent2", "background", "surface", "text", "muted", "success", "warning"],
+                        "required": THEME_COLOR_FIELDS,
                         "properties": {
-                            "accent": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "accent2": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "background": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "surface": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "text": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "muted": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "success": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
-                            "warning": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                            field: {"type": "string"}
+                            for field in THEME_COLOR_FIELDS
                         },
                     },
                     "slides": {
@@ -511,6 +305,12 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
                                     "type": "string",
                                     "enum": [
                                         "cover",
+                                        "split",
+                                        "flow",
+                                        "metrics",
+                                        "cards",
+                                        "table",
+                                        "summary",
                                         "section_divider",
                                         "problem_cards",
                                         "metric_cards",
@@ -521,36 +321,24 @@ SLIDE_DRAFT_RESPONSE_SCHEMA = {
                                         "summary_next_steps",
                                     ],
                                 },
+                                "asset_key": {"type": "string"},
+                                "visual": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["tone", "density", "imagePlacement", "highlightIndex"],
+                                    "properties": {
+                                        "tone": {"type": "string"},
+                                        "density": {"type": "string"},
+                                        "imagePlacement": {"type": "string"},
+                                        "highlightIndex": {"type": "integer"},
+                                    },
+                                },
                                 "speaker_notes": {"type": "string"},
                                 "content": {
                                     "type": "object",
                                     "additionalProperties": False,
-                                    "required": [
-                                        "subtitle",
-                                        "kicker",
-                                        "points",
-                                        "problems",
-                                        "metrics",
-                                        "steps",
-                                        "events",
-                                        "columns",
-                                        "rows",
-                                        "outcomes",
-                                        "next_steps",
-                                    ],
-                                    "properties": {
-                                        "subtitle": {"type": "string"},
-                                        "kicker": {"type": "string"},
-                                        "points": {"type": "array", "items": {"type": "string"}},
-                                        "problems": {"type": "array", "items": {"$ref": "#/$defs/card"}},
-                                        "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
-                                        "steps": {"type": "array", "items": {"$ref": "#/$defs/card"}},
-                                        "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
-                                        "columns": {"type": "array", "items": {"type": "string"}},
-                                        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-                                        "outcomes": {"type": "array", "items": {"type": "string"}},
-                                        "next_steps": {"type": "array", "items": {"type": "string"}},
-                                    },
+                                    "required": list(SLIDE_CONTENT_PROPERTIES.keys()),
+                                    "properties": SLIDE_CONTENT_PROPERTIES,
                                 },
                             },
                         },
@@ -634,7 +422,13 @@ def generate_content_ir_from_messages(request: dict) -> dict:
         return _finish("normalize_request", normalized, started_at)
 
     payload = normalized["request"]
-    llm_result = _call_llm_json(payload, CONTENT_IR_PROMPT, CONTENT_IR_RESPONSE_SCHEMA)
+    llm_result = _call_llm_json(
+        payload,
+        CONTENT_IR_PROMPT,
+        CONTENT_IR_RESPONSE_SCHEMA,
+        model_override=_ppt_model_for_payload(payload),
+        purpose="content_ir",
+    )
     warnings.extend(llm_result.get("warnings") or [])
     if llm_result.get("ok") is not True:
         return _finish("generate_content_ir", llm_result, started_at)
@@ -665,7 +459,13 @@ def generate_content_ir_from_messages(request: dict) -> dict:
 def generate_slide_draft_from_content_ir(content_ir: dict, options: dict | None = None) -> dict:
     started_at = time.perf_counter()
     payload = {"content_ir": content_ir if isinstance(content_ir, dict) else {}, "options": options or {}}
-    llm_result = _call_llm_json(payload, SLIDE_DRAFT_PROMPT, SLIDE_DRAFT_RESPONSE_SCHEMA)
+    llm_result = _call_llm_json(
+        payload,
+        SLIDE_DRAFT_PROMPT,
+        SLIDE_DRAFT_RESPONSE_SCHEMA,
+        model_override=_ppt_model_from_options(options),
+        purpose="slide_draft",
+    )
     warnings = list(llm_result.get("warnings") or [])
     if llm_result.get("ok") is not True:
         return _finish("generate_slide_draft", llm_result, started_at)
@@ -697,19 +497,28 @@ def _call_llm_for_ir(payload: JsonDict) -> JsonDict:
     return _call_llm_json(payload, PLANB_IR_PROMPT)
 
 
-def _call_llm_json(payload: JsonDict, system_prompt: str, response_schema: dict | None = None) -> JsonDict:
+def _call_llm_json(
+    payload: JsonDict,
+    system_prompt: str,
+    response_schema: dict | None = None,
+    *,
+    model_override: str | None = None,
+    purpose: str = "agent",
+) -> JsonDict:
     settings = get_agent_settings()
+    model = str(model_override or settings.model).strip()
     started_at = time.perf_counter()
     debug = {
         "llm_provider": settings.provider,
-        "llm_model": settings.model,
+        "llm_model": model,
+        "llm_purpose": purpose,
     }
     missing = [
         name
         for name, value in (
             ("AGENT_LLM_BASE_URL", settings.base_url),
             ("AGENT_LLM_API_KEY", settings.api_key),
-            ("AGENT_LLM_MODEL", settings.model),
+            ("AGENT_LLM_MODEL", model),
         )
         if not str(value or "").strip()
     ]
@@ -722,15 +531,16 @@ def _call_llm_json(payload: JsonDict, system_prompt: str, response_schema: dict 
         )
 
     request_body = {
-        "model": settings.model,
+        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
-        "temperature": settings.temperature,
-        "max_tokens": settings.max_tokens,
         "response_format": _response_format(response_schema),
     }
+    request_body[_token_limit_param(model)] = settings.max_tokens
+    if _supports_temperature(model):
+        request_body["temperature"] = settings.temperature
 
     try:
         response = httpx.post(
@@ -745,7 +555,13 @@ def _call_llm_json(payload: JsonDict, system_prompt: str, response_schema: dict 
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
         if response_schema:
-            fallback = _call_llm_json(payload, system_prompt, None)
+            fallback = _call_llm_json(
+                payload,
+                system_prompt,
+                None,
+                model_override=model,
+                purpose=purpose,
+            )
             if fallback.get("ok") is True:
                 fallback["warnings"] = [
                     *fallback.get("warnings", []),
@@ -812,6 +628,34 @@ def _response_format(response_schema: dict | None) -> dict:
             "schema": response_schema["schema"],
         },
     }
+
+
+def _ppt_model_for_payload(payload: JsonDict) -> str | None:
+    options = _as_dict(payload.get("options"))
+    targets = options.get("target_outputs") or []
+    if isinstance(targets, str):
+        targets = [item.strip() for item in targets.split(",") if item.strip()]
+    if isinstance(targets, list) and "ppt" in {str(target).strip() for target in targets}:
+        return get_agent_settings().ppt_model
+    return None
+
+
+def _ppt_model_from_options(options: dict | None) -> str:
+    opts = _as_dict(options)
+    explicit = str(opts.get("llm_model") or opts.get("model") or "").strip()
+    return explicit or get_agent_settings().ppt_model
+
+
+def _token_limit_param(model: str) -> str:
+    normalized = model.lower()
+    if normalized.startswith("gpt-5") or normalized.startswith("o"):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _supports_temperature(model: str) -> bool:
+    normalized = model.lower()
+    return not (normalized.startswith("gpt-5") or normalized.startswith("o"))
 
 
 def _safe_json_preview(value: Any, limit: int = 2000) -> str:
@@ -925,11 +769,29 @@ def _ensure_slide_draft_defaults(slide_draft: JsonDict, content_ir: JsonDict) ->
         slide.setdefault("id", f"slide_{index + 1}")
         slide.setdefault("title", str(slide.get("id") or f"Slide {index + 1}"))
         slide.setdefault("layout", "summary_next_steps")
+        slide["layout"] = _canonical_slide_layout(str(slide.get("layout") or ""))
+        slide.setdefault("asset_key", "")
+        if not isinstance(slide.get("visual"), dict):
+            slide["visual"] = {"tone": "", "density": "", "imagePlacement": "", "highlightIndex": -1}
+        else:
+            visual = slide["visual"]
+            visual.setdefault("tone", "")
+            visual.setdefault("density", "")
+            visual.setdefault("imagePlacement", "")
+            visual.setdefault("highlightIndex", -1)
         if not isinstance(slide.get("content"), dict):
             slide["content"] = {}
-        slide["content"] = _normalize_slide_content(str(slide.get("layout") or ""), slide["content"])
+        layout = str(slide.get("layout") or "")
+        slide["content"] = _normalize_slide_content(layout, slide["content"])
+        if not _slide_content_has_renderable_items(layout, slide["content"]):
+            slide["content"] = _fallback_slide_content(layout, slide["content"], slide, content_ir)
         slide.setdefault("speaker_notes", "")
     return out
+
+
+def _canonical_slide_layout(layout: str) -> str:
+    value = str(layout or "").strip()
+    return SLIDE_LAYOUT_ALIASES.get(value, value)
 
 
 def _validate_ir(ir: JsonDict) -> list[str]:
@@ -1000,7 +862,7 @@ def _validate_slide_draft(slide_draft: JsonDict) -> list[str]:
         if not isinstance(slide, dict):
             errors.append(f"slides[{index}] must be an object.")
             continue
-        layout = str(slide.get("layout") or "")
+        layout = _canonical_slide_layout(str(slide.get("layout") or ""))
         layouts.append(layout)
         for key in ("id", "title", "layout"):
             if not str(slide.get(key) or "").strip():
@@ -1020,8 +882,14 @@ def _validate_slide_draft(slide_draft: JsonDict) -> list[str]:
 
 def _normalize_slide_content(layout: str, content: JsonDict) -> JsonDict:
     out = dict(content)
+    layout = _canonical_slide_layout(layout)
     if layout == "section_divider":
-        out["points"] = _string_list_from_any(out.get("points") or out.get("bullets") or out.get("items"))
+        out["points"] = _string_list_from_any(
+            out.get("points")
+            or out.get("bullets")
+            or out.get("items")
+            or [out.get("left"), out.get("right"), out.get("body"), out.get("description")]
+        )
     elif layout == "problem_cards":
         out["problems"] = _card_list_from_any(out.get("problems") or out.get("cards") or out.get("items"))
     elif layout == "metric_cards":
@@ -1040,6 +908,64 @@ def _normalize_slide_content(layout: str, content: JsonDict) -> JsonDict:
         out["outcomes"] = _string_list_from_any(out.get("outcomes") or out.get("expected_outcomes") or out.get("benefits"))
         out["next_steps"] = _string_list_from_any(out.get("next_steps") or out.get("points") or out.get("bullets") or out.get("items"))
     return out
+
+
+def _fallback_slide_content(
+    layout: str,
+    content: JsonDict,
+    slide: JsonDict,
+    content_ir: JsonDict,
+) -> JsonDict:
+    title = str(slide.get("title") or content_ir.get("title") or "Summary").strip()
+    background = str(content_ir.get("background") or content_ir.get("subtitle") or title).strip()
+    out = dict(content)
+    if layout == "cover":
+        return {
+            **out,
+            "subtitle": str(content_ir.get("subtitle") or background or title),
+            "kicker": str(content_ir.get("audience") or "Generated presentation"),
+        }
+    if layout == "problem_cards":
+        cards = _card_list_from_any(
+            content_ir.get("problems")
+            or content_ir.get("solution_modules")
+            or content_ir.get("risks")
+            or [{"title": title, "description": background}]
+        )
+        return {**out, "problems": cards or [{"title": title, "body": background}]}
+    if layout == "metric_cards":
+        metrics = _metric_list_from_any(content_ir.get("metrics") or [])
+        if not metrics:
+            metrics = [{"label": "核心目标", "value": title[:24], "note": background[:80]}]
+        return {**out, "metrics": metrics}
+    if layout == "three_stage_flow":
+        steps = _card_list_from_any(
+            content_ir.get("process")
+            or content_ir.get("solution_modules")
+            or content_ir.get("implementation_plan")
+            or [{"title": "下一步", "description": background}]
+        )
+        return {**out, "steps": steps or [{"title": "下一步", "body": background}]}
+    if layout == "timeline":
+        events = _event_list_from_any(content_ir.get("implementation_plan") or [])
+        if not events:
+            events = [{"date": "近期", "title": title, "body": background}]
+        return {**out, "events": events}
+    if layout in {"risk_table", "comparison_table"}:
+        rows = _rows_from_any(content_ir.get("risks") or [])
+        if not rows:
+            rows = [[title, background]]
+        columns = out.get("columns") or ["事项", "说明"]
+        return {**out, "columns": columns, "rows": rows}
+    if layout == "summary_next_steps":
+        outcomes = _string_list_from_any(content_ir.get("expected_outcomes") or [])
+        next_steps = _string_list_from_any(content_ir.get("decision_points") or content_ir.get("process") or [])
+        return {
+            **out,
+            "outcomes": outcomes or [background or title],
+            "next_steps": next_steps or [title],
+        }
+    return out or {"points": [background or title]}
 
 
 def _slide_content_has_renderable_items(layout: str, content: JsonDict) -> bool:
@@ -1100,6 +1026,13 @@ def _default_theme() -> dict[str, str]:
         "muted": "#64748B",
         "success": "#16A34A",
         "warning": "#F97316",
+        "cover_bg": "#0F172A",
+        "cover_title": "#FFFFFF",
+        "cover_subtitle": "#E2E8F0",
+        "cover_muted": "#CBD5E1",
+        "body_title": "#0F172A",
+        "body_text": "#0F172A",
+        "body_muted": "#64748B",
         "fontFace": "Aptos",
     }
 
@@ -1148,6 +1081,8 @@ def _string_list_from_any(value: Any) -> list[str]:
     if isinstance(value, list):
         output = []
         for item in value:
+            if item is None:
+                continue
             if isinstance(item, dict):
                 text = item.get("title") or item.get("label") or item.get("body") or item.get("description") or item.get("text")
                 if item.get("value"):

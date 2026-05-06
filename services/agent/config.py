@@ -15,6 +15,7 @@ class AgentSettings:
     base_url: str
     api_key: str
     model: str
+    ppt_model: str
     timeout_seconds: float = 60.0
     temperature: float = 0.2
     max_tokens: int = 3000
@@ -28,9 +29,10 @@ def get_agent_settings() -> AgentSettings:
         base_url=_env_value(env, "AGENT_LLM_BASE_URL"),
         api_key=_env_value(env, "AGENT_LLM_API_KEY"),
         model=_env_value(env, "AGENT_LLM_MODEL"),
+        ppt_model=_env_value(env, "AGENT_PPT_LLM_MODEL", "gpt-5.2"),
         timeout_seconds=float(_env_value(env, "AGENT_LLM_TIMEOUT_SECONDS", "60")),
         temperature=float(_env_value(env, "AGENT_LLM_TEMPERATURE", "0.2")),
-        max_tokens=int(_env_value(env, "AGENT_LLM_MAX_TOKENS", "3000")),
+        max_tokens=int(_env_value(env, "AGENT_LLM_MAX_TOKENS", "6000")),
     )
 
 

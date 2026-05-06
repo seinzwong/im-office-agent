@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import time
 import urllib.parse
 from typing import Any, Optional
 
@@ -14,9 +16,11 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from ...adapter.runtime import lark_cli_path, parse_json_object
 from ..config import Settings, get_settings
 from ..drive_artifacts import list_artifacts
 from ..pipelines.delivery import run_deliver_artifacts
@@ -24,6 +28,7 @@ from ..pipelines.summary_from_event import run_summary_for_chat
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
+_pending_slides_auth: dict[str, Any] = {}
 
 
 @router.get("/me")
@@ -105,9 +110,13 @@ class DeliverIn(BaseModel):
 def deliver(
     body: DeliverIn,
     background_tasks: BackgroundTasks,
-) -> dict[str, str]:
+) -> Any:
     w = bool(body.deliverables.get("whiteboard", True))
     sl = bool(body.deliverables.get("slides", False))
+    if sl:
+        auth = _ensure_slides_user_authorization_started()
+        if auth is not None:
+            return JSONResponse(status_code=409, content=auth)
     if not w and not sl:
         raise HTTPException(400, "请至少选择画板或 PPT 之一")
     log.info("deliver accepted file_count=%s whiteboard=%s slides=%s", len(body.file_tokens), w, sl)
@@ -120,6 +129,158 @@ def deliver(
     return {
         "status": "accepted",
         "message": "已提交生成，请稍后在飞书该目录中刷新本页以查看新文件。",
+    }
+
+
+def _ensure_slides_user_authorization_started() -> dict[str, Any] | None:
+    cli = lark_cli_path()
+    try:
+        status_run = subprocess.run(
+            [cli, "auth", "status"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lark-cli auth status failed: %s", exc)
+        return {"status": "error", "message": f"无法检查飞书 CLI 授权：{exc}"}
+
+    status_body = parse_json_object(status_run.stdout)
+    note = str(status_body.get("note") or "")
+    identity = str(status_body.get("identity") or "")
+    if status_run.returncode == 0 and "no token" not in note.lower() and identity != "bot":
+        return None
+
+    try:
+        login_run = subprocess.run(
+            [cli, "auth", "login", "--domain", "slides,drive,docs", "--no-wait", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lark-cli auth login --no-wait failed: %s", exc)
+        return {"status": "error", "message": f"无法发起飞书 CLI 授权：{exc}"}
+
+    login_body = parse_json_object(login_run.stdout)
+    verification_url = str(login_body.get("verification_url") or "")
+    device_code = str(login_body.get("device_code") or "")
+    if login_run.returncode != 0 or not verification_url:
+        return {
+            "status": "error",
+            "message": "飞书 CLI 用户授权缺失，且自动发起授权失败。",
+            "stdout": login_run.stdout,
+            "stderr": login_run.stderr,
+        }
+
+    log.warning("slides user authorization required: %s", verification_url)
+    return {
+        "status": "auth_required",
+        "message": f"生成 PPT 需要重新授权飞书 CLI。请打开授权链接完成授权后，再点击开始生成：{verification_url}",
+        "verification_url": verification_url,
+        "device_code": device_code,
+        "expires_in": login_body.get("expires_in"),
+    }
+
+
+def _ensure_slides_user_authorization_started() -> dict[str, Any] | None:
+    cli = lark_cli_path()
+    if _slides_user_authorized(cli):
+        _pending_slides_auth.clear()
+        return None
+
+    pending = _pending_slides_auth_response()
+    if pending is not None:
+        return pending
+
+    try:
+        login_run = subprocess.run(
+            [cli, "auth", "login", "--domain", "slides,drive,docs", "--no-wait", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lark-cli auth login --no-wait failed: %s", exc)
+        return {"status": "error", "message": f"无法发起飞书 CLI 授权：{exc}"}
+
+    login_body = parse_json_object(login_run.stdout)
+    verification_url = str(login_body.get("verification_url") or "")
+    device_code = str(login_body.get("device_code") or "")
+    if login_run.returncode != 0 or not verification_url or not device_code:
+        return {
+            "status": "error",
+            "message": "飞书 CLI 用户授权缺失，且自动发起授权失败。",
+            "stdout": login_run.stdout,
+            "stderr": login_run.stderr,
+        }
+
+    expires_in = int(login_body.get("expires_in") or 600)
+    process = subprocess.Popen(
+        [cli, "auth", "login", "--device-code", device_code],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    _pending_slides_auth.clear()
+    _pending_slides_auth.update(
+        {
+            "verification_url": verification_url,
+            "device_code": device_code,
+            "expires_at": time.time() + expires_in,
+            "process": process,
+        }
+    )
+    log.warning("slides user authorization required: %s", verification_url)
+    return _pending_slides_auth_response()
+
+
+def _slides_user_authorized(cli: str) -> bool:
+    try:
+        status_run = subprocess.run(
+            [cli, "auth", "status"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("lark-cli auth status failed: %s", exc)
+        return False
+    status_body = parse_json_object(status_run.stdout)
+    note = str(status_body.get("note") or "")
+    identity = str(status_body.get("identity") or "")
+    return status_run.returncode == 0 and "no token" not in note.lower() and identity != "bot"
+
+
+def _pending_slides_auth_response() -> dict[str, Any] | None:
+    if not _pending_slides_auth:
+        return None
+    expires_at = float(_pending_slides_auth.get("expires_at") or 0)
+    process = _pending_slides_auth.get("process")
+    if time.time() >= expires_at or (process is not None and process.poll() is not None):
+        _pending_slides_auth.clear()
+        return None
+    verification_url = str(_pending_slides_auth.get("verification_url") or "")
+    return {
+        "status": "auth_required",
+        "message": f"生成 PPT 需要重新授权飞书 CLI。请打开授权链接完成授权，完成后再点击开始生成：{verification_url}",
+        "verification_url": verification_url,
+        "device_code": _pending_slides_auth.get("device_code"),
+        "expires_in": max(0, int(expires_at - time.time())),
     }
 
 

@@ -11,8 +11,10 @@ services/gateway/gateway.yaml
 apps/web/config.yaml
 node_modules/
 apps/web/.npm-cache/
+.local-tools/
 dist/
 logs/
+.artifacts/
 *.db
 .coverage
 htmlcov/
